@@ -8,9 +8,9 @@ The application runs as static HTML, CSS, and JavaScript. Serve the repository r
 index.html              Entry point, toolbar, panels, font links
 styles-v4.css           Navy / paper / signal-red visual system
 data-v4.js              Maps, markers, reference zones, model weights, playbook
-app-core.js             Map viewport, layers, search, selection, sharing, bookmarks
+app-core.js             Map viewport, layers, search, sharing, bookmarks, photo viewer
 app-game.js             Four-step planning, scenario scoring, review, PNG export
-pano.js                 Canvas 2D procedural terrain illustrations and photo viewer
+pano.js                 Canvas 2D procedural terrain illustrations
 assets/map-*.jpg        Bundled third-party game map images
 assets/terrain/         Optional user-supplied terrain photographs
 docs/readme/            Repository cover and product previews
@@ -22,7 +22,8 @@ tests/                  Regression checks
 
 - `MAP_DATA`：三图点位、载具、地形、资源与密度评级。坐标以地图百分比表示。
 - `TERRAIN_CATS`：19 类地形标签及说明。
-- `CIRCLE_RULES`：参考圈半径、等待时间、缩圈参数；不要将参考值视为手游官方数值。
+- `CIRCLE_RADIUS_M`：各地图参考圈半径；不要将参考值视为手游官方数值。
+- `CIRCLE_RULES`：等待时间、缩圈速度与伤害等参考参数。
 - `CIRCLE_PREDICTOR`：水面、资源、掩体、位移与方向延续等评分参数。
 - `PRO_PLAYBOOK`：运营思路与战术说明，修改时应核对来源与时效。
 
