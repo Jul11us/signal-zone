@@ -123,7 +123,10 @@ const ShareLink = {
   },
   copy() {
     const url = this.encode();
-    const done = () => toast('📤 分享链接已复制，发给队友即可打开同一局面');
+    const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    const done = () => toast(local
+      ? '分享链接已复制。这是本机地址，队友要在这台电脑打开，或换成部署后的网址'
+      : '分享链接已复制，发给队友即可打开同一局面');
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(url).then(done).catch(() => this.fallback(url, done));
     } else this.fallback(url, done);
@@ -195,9 +198,16 @@ const MapView = {
     // 悬浮 UI 上的指针操作不当作地图拖动/点击
     const isUI = (e) => !!(e.target.closest('.mk, .map-legend, .game-hud, .map-hud-title, .hud-restore, #mapToolbar, #mapScale, .map-tools, .map-hud, button, input, select, label'));
 
-    // 拖拽平移
+    // 拖拽平移。正在编辑的圈优先：圈内移动，右侧手柄改半径，圈外才平移。
     this.stage.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
       if (isUI(e)) return;
+      const hit = this.circleHit(e);
+      if (hit && window.Game && Game.beginCircleDrag) {
+        e.preventDefault();
+        Game.beginCircleDrag(hit, e);
+        return;
+      }
       if (App.mode === 'game' && App.tool && App.tool !== 'pan') return;
       App.dragging = true;
       App.dragStart = { x: e.clientX - App.pan.x, y: e.clientY - App.pan.y };
@@ -229,6 +239,7 @@ const MapView = {
     // 右键收藏自定义点位
     this.stage.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      if (this.circleHit(e)) return;
       if (e.target.closest('.mk, .map-legend, .game-hud, .map-hud-title, .hud-restore, #mapToolbar, #mapScale, .map-hud, button, input, select, label')) return;
       if (App.mode === 'game' && App.tool && App.tool !== 'pan') return;
       const p = this.toPercent(e.clientX, e.clientY);
@@ -242,6 +253,7 @@ const MapView = {
     this.stage.addEventListener('click', (e) => {
       if (isUI(e)) return;
       if (App.dragged) { App.dragged = false; return; }
+      if (this.circleHit(e)) return;
       const p = this.toPercent(e.clientX, e.clientY);
       Tools.handleClick(p);
     });
@@ -316,6 +328,36 @@ const MapView = {
   },
 
   reset() { App.zoom = 1; App.pan = { x: 0, y: 0 }; this.clampPan(); this.updateTransform(); },
+
+  /* 把正在编辑的圈完整放进舞台。大圈会缩小，小圈最多放到 2.8 倍。 */
+  fitCircle(c) {
+    if (!c || !this.baseW || !this.stage) return;
+    const span = Math.max(12, c.r * 2 * 1.35);
+    const stageW = Math.max(200, this.stage.clientWidth - 36);
+    const stageH = Math.max(200, this.stage.clientHeight - 36);
+    const zoom = clamp(Math.min(
+      stageW / (span / 100 * this.baseW),
+      stageH / (span / 100 * this.baseH)
+    ), 1, 2.8);
+    App.zoom = zoom;
+    App.pan.x = -(c.cx - 50) / 100 * this.baseW * App.zoom;
+    App.pan.y = -(c.cy - 50) / 100 * this.baseH * App.zoom;
+    this.clampPan();
+    this.updateTransform();
+    this.scheduleMarkers();
+  },
+
+  /* 编辑圈的命中：先判右侧手柄（约 20 像素），再判圆内。 */
+  circleHit(e) {
+    const ed = App.circleEdit;
+    if (!ed || App.mode !== 'game' || (App.tool && App.tool !== 'pan') || !this.baseW) return null;
+    const pt = this.toPercent(e.clientX, e.clientY);
+    const px = (this.baseW * App.zoom) / 100 || 7;
+    const handleR = Math.max(1.4, 20 / px);
+    if (Math.hypot(pt[0] - (ed.cx + ed.r), pt[1] - ed.cy) <= handleR) return 'resize';
+    if (Math.hypot(pt[0] - ed.cx, pt[1] - ed.cy) <= ed.r) return 'move';
+    return null;
+  },
 
   /* 把地图上某个百分比坐标居中显示（找不到推荐点位时的"定位"） */
   focus(coords, zoom) {
@@ -510,9 +552,7 @@ const MapView = {
       if (!c) return;
       const editing = App.circleEdit && App.circleEdit.phase === n;
       s += `<circle cx="${c.cx}" cy="${c.cy}" r="${c.r}" class="ov-circle-set${editing ? ' editing' : ''}"/>`;
-      s += editing
-        ? `<text x="${c.cx}" y="${c.cy - c.r - 1.6}" class="ov-text circle">第 ${n} 圈 · ${Math.round(c.r * 80)}m</text>`
-        : `<text x="${c.cx}" y="${c.cy - c.r - 1.2}" class="ov-text circle dim">${n}圈 ${Math.round(c.r * 80)}m</text>`;
+      if (!editing) s += `<text x="${c.cx}" y="${c.cy - c.r - 1.2}" class="ov-text circle dim">${n}圈</text>`;
     });
     if (App.circleEdit && !App.circles[App.circleEdit.phase]) {
       const c = App.circleEdit;
@@ -550,9 +590,11 @@ const MapView = {
         if (App.game.chosen && App.game.chosen.name === r.name) return;
         if (!r.coords || r.coords.length !== 2) return;
         const [x, y] = r.coords;
-        s += `<circle cx="${x}" cy="${y}" r="1.7" class="ov-rec r${i + 1}"/>`;
-        s += `<text x="${x}" y="${(y + 0.55).toFixed(2)}" class="ov-text rec-num" text-anchor="middle">${i + 1}</text>`;
-        s += `<text x="${x}" y="${(y - 2.3).toFixed(2)}" class="ov-text rec-label" text-anchor="middle">推荐${i + 1} · ${r.name}</text>`;
+        const mark = r.edge ? '边' : String(i + 1);
+        const title = r.edge ? '沿航线边缘房' : '推荐' + (i + 1);
+        s += `<g class="ov-rec-hit"><title>${title} · ${escapeHTML(r.name)}</title>`;
+        s += `<circle cx="${x}" cy="${y}" r="1.7" class="ov-rec${r.edge ? ' edge' : ' r' + (i + 1)}"/>`;
+        s += `<text x="${x}" y="${(y + 0.55).toFixed(2)}" class="ov-text rec-num" text-anchor="middle">${mark}</text></g>`;
       });
     }
     // 进圈方案里的"下个圈预估"
@@ -604,9 +646,8 @@ const MapView = {
     // 大头针 / 选点
     const pin = App.game.chosen && App.game.chosen.coords;
     if (pin) {
-      s += `<g class="ov-pin"><circle cx="${pin[0]}" cy="${pin[1]}" r="2.6" class="ov-pin-ring"/>
+      s += `<g class="ov-pin"><title>${escapeHTML(App.game.chosen.name)}</title><circle cx="${pin[0]}" cy="${pin[1]}" r="2.6" class="ov-pin-ring"/>
         <circle cx="${pin[0]}" cy="${pin[1]}" r="1.2" fill="#f4586a"/></g>`;
-      s += `<text x="${pin[0]}" y="${pin[1] - 3.4}" class="ov-text pin">${App.game.chosen.name}</text>`;
     }
     if (App.pin && App.pin.temp) {
       s += `<circle cx="${App.pin.coords[0]}" cy="${App.pin.coords[1]}" r="2" class="ov-draft"/>`;
@@ -621,39 +662,62 @@ const MapView = {
 /* ============================ 绘制工具 ============================ */
 const Tools = {
   GAME_ONLY: ['flight', 'circle', 'pin', 'markpos'],
+  _flightVersion: 0,
   set(tool) {
     if (App.mode !== 'game' && this.GAME_ONLY.includes(tool)) {
       toast('ℹ️ 航线 / 圈形 / 大头针只在「游戏模式」下可用，点右上角切换到游戏模式');
       return;
     }
+    this._flightVersion++;
     App.tool = tool;
     const stage = $('#mapStage');
     stage.className = 'map-stage' + (tool && tool !== 'pan' ? ' tool-' + tool : '');
     $$('.tool-btn[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
     const tips = {
-      flight: '在地图上点击两次：先点起点，再点终点',
+      flight: '在地图上点击两次：先点起点，再点终点。终点需要落在岛上',
       circle: '点击设置圈中心，再点击一次确定半径',
       pin: '点击地图放置大头针选点',
       markpos: '点击地图，标记这一圈结束后你们队的实际位置',
       pan: '按住拖动平移地图'
     };
     if (tips[tool]) toast(tips[tool]);
+    if (tool === 'flight' && window.CirclePredictor) CirclePredictor.pixels();
+  },
+  async placeFlight(p) {
+    if (App.mode !== 'game' || App.tool !== 'flight') return;
+    const version = this._flightVersion, mapId = App.mapId, flight = App.flight;
+    const start = flight && flight.start, end = flight && flight.end;
+    const current = () => this._flightVersion === version && App.mapId === mapId
+      && App.mode === 'game' && App.tool === 'flight' && App.flight === flight
+      && (!flight || (flight.start === start && flight.end === end));
+    const settingEnd = !!start;
+    const waters = window.CirclePredictor;
+    if (waters) {
+      await waters.pixels();
+      if (!current()) return;
+      if (waters.isOpenWater(p[0], p[1])) {
+        toast(settingEnd ? '终点在海里，请点在岛上' : '起点在海里，请点在岛上');
+        return;
+      }
+    }
+    if (!App.flight || !App.flight.start) {
+      App.flight = { start: p, end: null };
+      toast('已设置航线起点，再点终点');
+    } else {
+      App.flight.end = p;
+      App.flight.draft = null;
+      this.set('pan');
+      toast('✈️ 航线绘制完成');
+      if (window.Game) Game.onFlightReady();
+    }
+    MapView.renderOverlay();
   },
   handleClick(p) {
     const t = App.tool;
     if (App.mode !== 'game' && this.GAME_ONLY.includes(t)) return;
     if (t === 'flight') {
-      if (!App.flight || !App.flight.start) {
-        App.flight = { start: p, end: null };
-        toast('已设置航线起点，再点终点');
-      } else {
-        App.flight.end = p;
-        App.flight.draft = null;
-        this.set('pan');
-        MapView.renderOverlay();
-        toast('✈️ 航线绘制完成');
-        if (window.Game) Game.onFlightReady();
-      }
+      this.placeFlight(p);
+      return;
     } else if (t === 'circle') {
       if (!App.circle || App.circle._done) {
         App.circle = { cx: p[0], cy: p[1], r: 0, _done: false };
@@ -1268,6 +1332,7 @@ const Sidebar = {
 
 /* ============================ 启动 ============================ */
 function setMap(id, silent) {
+  Tools._flightVersion++;
   App.mapId = id;
   App.selected = null; App.flight = null; App.circle = null; App.routes = []; App.pin = null;
   if (window.Game) Game.reset();
@@ -1336,6 +1401,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     clearTimeout(clearArmed); clearArmed = null;
+    Tools._flightVersion++;
     App.flight = null; App.circle = null; App.circles = {}; App.circleEdit = null; App.prediction = null;
     App.routes = []; App.pin = null;
     if (window.Game) { App.game.planPhase = 1; Game.clearSelection(); }

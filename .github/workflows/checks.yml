@@ -22,5 +22,5 @@ jobs:
           node --check app-game.js
           node --check data-v4.js
           node --check pano.js
-      - name: Check sharing and bookmark input handling
-        run: node --test tests/share-security.test.cjs
+      - name: Check sharing, bookmarks and planning interactions
+        run: node --test

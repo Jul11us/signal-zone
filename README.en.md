@@ -61,8 +61,8 @@ A 1080 × 1500 PNG with a paper field-manual layout, available from the planning
 | Stage | What you can do |
 | :--- | :--- |
 | **Intelligence** | Switch between three maps, search locations, combine compound, density, vehicle, and 19 terrain-category layers, and inspect tactical notes. |
-| **Drop planning** | Choose a playstyle, draw a flight path, compare scored drop suggestions, and inspect estimated congestion. |
-| **Rotation** | Mark a landing point, confirm reference zones, and review suggested timing, routes, and squad roles. |
+| **Drop planning** | Choose a playstyle, draw a flight path, and inspect estimated congestion. Vehicle-first plans prioritize safety scores and may add an outlying compound when all suggested towns are risky. |
+| **Rotation** | Mark a landing point, drag zones from inside the circle, resize with a handle, and review nearby place names, route suggestions, timing, and squad roles. |
 | **Zone scenarios** | Sample 600 candidate centers within a geometric constraint and score them using water, resources, cover, and movement factors. |
 | **Sharing** | Restore the same map, flight path, zones, and pin through a share link, or export a field briefing as a PNG. |
 | **Review** | Save observed circles, review retrospective candidate-region hits and distance errors, and experiment with local weight adjustments after enough adjacent-circle samples. |
@@ -115,6 +115,8 @@ There are no application dependencies, frontend build steps, or backend configur
 Locations, resource ratings, vehicles, and tactical notes are curated reference data and may change with game updates. The playbook explains strategy concepts rather than current official competition rules. The bundled 360° views are procedural illustrations; terrain photographs are not included. See the [asset directory instructions](assets/terrain/README.txt) to add your own images.
 
 **Your records stay in your browser.** Bookmarks, review samples, and calibration weights use `localStorage`; the current application has no account system or application backend. Clearing site data removes these local records. Share links encode planning state in the URL: anyone with a link can read and restore it. Encoding is not encryption.
+
+Links using `localhost` or `127.0.0.1` point to the recipient's own computer. To share across devices, use a deployed address that your squad can reach. The application warns when a copied link uses a local address.
 
 ### Development and assets
 

@@ -53,7 +53,7 @@ node --check app-core.js
 node --check app-game.js
 node --check data-v4.js
 node --check pano.js
-node --test tests/share-security.test.cjs
+node --test
 python -m http.server 8642 --bind 127.0.0.1
 ```
 

@@ -34,7 +34,14 @@ const Fmt = {
     const name = dirs[Math.round(deg / 45) % 8];
     return { deg: Math.round(deg), name };
   },
-  m(pct) { return Math.round(pct * 80); }
+  m(pct) { return Math.round(pct * 80); },
+  zhDur(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const m = Math.floor(sec / 60), s = sec % 60;
+    if (m && s) return m + ' 分 ' + s + ' 秒';
+    if (m) return m + ' 分';
+    return s + ' 秒';
+  }
 };
 
 /* 圈半径（1% = 80m） */
@@ -102,6 +109,50 @@ const CirclePredictor = {
       if (B > R + 14 && B > G + 4 && B > 55 && R < 125) water++;
     }
     return n ? water / n : 0;
+  },
+
+  /* 航线起终点：周围一小片大多是水，才算点进海里。单像素的河岸和阴影不算。 */
+  isOpenWater(cx, cy) {
+    if (!this._px) return false;
+    const d = this._px.data, W = this._W, H = this._H;
+    const px = cx / 100 * (W - 1), py = cy / 100 * (H - 1);
+    const pr = Math.max(3, 2.5 / 100 * W);
+    const steps = 9;
+    let water = 0, n = 0;
+    const wet = (R, G, B) => {
+      const bright = B > R + 14 && B > G + 4 && B > 55 && R < 125;
+      const cool = B >= R + 8 && G >= R + 6 && R < 80 && B < 100 && (B + G) > R * 2.1;
+      const abyss = R < 28 && G < 40 && B < 48 && B >= R + 4 && G >= R && (B + G) >= R + 16;
+      return bright || cool || abyss;
+    };
+    for (let iy = 0; iy < steps; iy++) {
+      for (let ix = 0; ix < steps; ix++) {
+        const dx = (ix / (steps - 1) - 0.5) * 2 * pr;
+        const dy = (iy / (steps - 1) - 0.5) * 2 * pr;
+        if (dx * dx + dy * dy > pr * pr) continue;
+        const x = Math.round(px + dx), y = Math.round(py + dy);
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        n++;
+        const k = (y * W + x) * 4;
+        if (wet(d[k], d[k + 1], d[k + 2])) water++;
+      }
+    }
+    return n > 0 && water / n >= 0.55;
+  },
+
+  /* 预测候选区用最近的地名，不用内部坐标 */
+  placeNear(x, y) {
+    const m = (window.MAP_DATA && MAP_DATA[App.mapId]) || MAP();
+    let best = null, bd = Infinity;
+    (m.pois || []).forEach(p => {
+      if (!p.coords) return;
+      const dist = GeoUtil.dist(p.coords, [x, y]);
+      if (dist < bd) { bd = dist; best = p; }
+    });
+    if (!best) return '地图中部';
+    const meters = Math.round(bd * 80);
+    if (meters < 150) return best.name + '附近';
+    return '距' + best.name + '约 ' + meters + ' 米';
   },
 
   /* predict(circlesOverride, mapId)：默认读当前对局；复盘回溯时传入
@@ -206,12 +257,12 @@ const CirclePredictor = {
         <div class="pred-fact">数学结论：下一圈圆心<b>必在</b>青色虚线圆内（面积只有当前圈的 ${Math.round(r.shrink * 100)}%）</div>
         ${r.flat
         ? `<div class="pred-flat">这一圈可行域内地形 / 物资条件接近，没有形成显著热点——按可行域整体规划即可，虚线圆内任意落点都合理。</div>`
-        : r.top.map(b => `
+        : `<p class="hint">下面几块比周围更值得先看。百分比是采样里的相对高低。</p>` + r.top.map(b => `
           <div class="pred-zone z${b.rank}">
             <i>${b.rank}</i>
-            <div><b>${Math.round(b.prob * 100)}%</b><span>中心 (${b.cx.toFixed(0)}, ${b.cy.toFixed(0)}) · 水 ${Math.round(b.water * 100)}%</span></div>
+            <div><b>${this.placeNear(b.cx, b.cy)}</b><span>相对 ${Math.round(b.prob * 100)}% · 水 ${Math.round(b.water * 100)}%</span></div>
           </div>`).join('')}
-        ${r.hold ? `<div class="pred-hold">建议优先占位：<b>${r.hold.name}</b>（圈内物资最高， loot ${r.hold.loot}）</div>` : ''}
+        ${r.hold ? `<div class="pred-hold">建议优先占位：<b>${r.hold.name}</b>（圈内物资最高，资源 ${r.hold.loot}）</div>` : ''}
         <p class="hint">${r.note}</p>
       </div>`;
   }
@@ -401,7 +452,7 @@ const CongestionSim = {
 const Game = {
   /* ------------------------------ 生命周期 ------------------------------ */
   reset() {
-    App.game.recommend = []; App.game.chosen = null; App.game.plan = null;
+    App.game.recommend = []; App.game.recommendWarn = false; App.game.chosen = null; App.game.plan = null;
     App.game.planPhase = 1;
     App.game.phasePos = {}; App.game.teamPos = null; App.game.hudHidden = false;
     App.circles = {}; App.circle = null; App.circleEdit = null; App.prediction = null; App.congestion = null;
@@ -602,10 +653,10 @@ const Game = {
         <div class="section-title">航线</div>
         <div class="row-2">
           <button class="tool-btn wide" data-tool="flight" onclick="Tools.set('flight')">✈️ ${App.flight && App.flight.end ? '重新绘制航线' : '绘制航线'}</button>
-          <button class="ghost-btn" onclick="App.flight=null;App.routes=[];App.congestion=null;MapView.renderOverlay();Game.renderStep1()">清除</button>
+          <button class="ghost-btn" onclick="Tools.set('pan');App.flight=null;App.routes=[];App.congestion=null;MapView.renderOverlay();Game.renderStep1()">清除</button>
         </div>
         <p class="hint">${App.flight && App.flight.end ? '✅ 航线已绘制，可以计算了' : '在地图上点击两次：起点 → 终点'}</p>
-        <button class="primary-btn" id="calcDrop">🎯 计算推荐跳点</button>
+        <button class="primary-btn" id="calcDrop" ${g.style && App.flight && App.flight.end ? '' : 'disabled'}>🎯 计算推荐跳点</button>
         <div id="dropResult"></div>
         <div class="predict-sec">
           <div class="section-title">🚦 航线拥堵模拟</div>
@@ -623,14 +674,18 @@ const Game = {
       App.game.style = b.dataset.style;
       $$('#inspector .style-card').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
+      this.syncCalcButton();
     });
     $$('#followRow .seg-btn').forEach(b => b.onclick = () => {
       App.game.followers = +b.dataset.n;
+      App.game.compTouched = false;
+      App.game.compSize = App.game.followers + 1;
       $$('#followRow .seg-btn').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
     });
     const c = $('#calcDrop');
     if (c) c.onclick = () => this.calcDrop();
+    this.syncCalcButton();
     const cb = $('#congBtn');
     if (cb) cb.onclick = () => {
       const r = CongestionSim.run();
@@ -742,8 +797,8 @@ const Game = {
       ['转移目标', Math.round(destScore)], ['落点安全', Math.round(safety)]];
       const total = carScore * 0.36 + dropScore * 0.30 + destScore * 0.22 + safety * 0.12;
       const extra = [
-        `固定刷新：${fv.v.type}，距落点约 ${Fmt.m(fv.d)}（${fv.v.location}）`,
-        target ? `拿车后建议开往 ${target.p.name}（${Fmt.m(target.d)}，资源 ${target.p.loot}、密度 ${target.p.density}）`
+        `固定刷新：${fv.v.type}，距落点约 ${Fmt.m(fv.d)} 米（${fv.v.location}）`,
+        target ? `拿车后建议开往 ${target.p.name}（${Fmt.m(target.d)} 米，资源 ${target.p.loot}、密度 ${target.p.density}）`
           : '周边没有特别合适的转移目标，可以沿公路向圈心方向找房区'
       ];
       return mk('vehicle', '找车转移', total, parts, extra);
@@ -763,10 +818,14 @@ const Game = {
       const parts = [['可轮转房群', Math.round(rotScore)], ['安全性', Math.round(safeScore)],
       ['载具便利', Math.round(vehScore)], ['落地距离', Math.round(dropScore)]];
       const total = rotScore * 0.32 + safeScore * 0.26 + vehScore * 0.22 + dropScore * 0.12 + lootScore * 0.08;
+      const shown = clusters.slice(0, 3);
       const extra = [
-        clusters.length ? `周边 ${clusters.length} 个房群可轮转：${clusters.slice(0, 3).map(c => c.p.name).join('、')}`
+        clusters.length
+          ? (clusters.length > shown.length
+            ? `附近 ${clusters.length} 个房群，先去这 ${shown.length} 个：${shown.map(c => c.p.name).join('、')}`
+            : `周边 ${clusters.length} 个房群可轮转：${shown.map(c => c.p.name).join('、')}`)
           : '周边房群较少，需要靠单点搜完再走',
-        veh.best ? `最近载具：${veh.best.v.type}（${Fmt.m(veh.best.d)}，${veh.best.k}刷新），搜完直接换点`
+        veh.best ? `最近载具：${veh.best.v.type}（${Fmt.m(veh.best.d)} 米，${veh.best.k}刷新），搜完直接换点`
           : '附近没有载具点，轮转只能靠步行，效率会低一些'
       ];
       return mk('wild', '野点发育', total, parts, extra);
@@ -816,6 +875,7 @@ const Game = {
       }
       picked.sort((a, b) => b.total - a.total);
       g.recommend = picked;
+      this.decorateRecommend(picked);
       this.showRecommend();
       MapView.renderOverlay();
       GameSidebar.render();
@@ -833,12 +893,113 @@ const Game = {
       if (picked.some(x => GeoUtil.dist(x.coords, r.coords) < 6)) continue;
       picked.push(r);
     }
+    if (style.strategy === 'vehicle') this.orderBySafety(picked);
     g.recommend = picked;
+    this.decorateRecommend(picked);
+    if (style.strategy === 'vehicle' && g.recommendWarn) {
+      const edge = this.edgeAlongFlight(picked);
+      if (edge) picked.push(edge);
+    }
     if (!picked.length) toast('⚠️ 这条航线附近没有符合该打法的点位，换个打法或重画航线试试');
     this.showRecommend();
     MapView.renderOverlay();
     GameSidebar.render();
     if (picked.length) toast(`✅ 已生成 ${picked.length} 个「${style.name}」推荐跳点`);
+  },
+
+  syncCalcButton() {
+    const c = $('#calcDrop');
+    if (c) c.disabled = !(App.game.style && App.flight && App.flight.end);
+  },
+
+  safetyScore(r) {
+    const s = (r.breakdown || []).find(([n]) => n === '落点安全' || n === '安全性');
+    return s ? s[1] : null;
+  },
+
+  /* 找车转移：安全分达到 40 的排在前面；都不到 40 时按安全分排，不让落地速度占第一。 */
+  orderBySafety(list) {
+    list.forEach(r => { r.safety = this.safetyScore(r); });
+    const safe = [], risky = [];
+    list.forEach(r => ((r.safety == null || r.safety >= 40) ? safe : risky).push(r));
+    safe.sort((a, b) => b.total - a.total);
+    risky.sort((a, b) => b.safety - a.safety || b.total - a.total);
+    list.splice(0, list.length, ...safe, ...risky);
+  },
+
+  /* 城区都不安全时，沿航线补一个更安全的房群，放在列表下面。 */
+  edgeAlongFlight(list) {
+    if (!App.flight || !App.flight.end) return null;
+    const names = new Set(list.map(r => r.name));
+    const safest = Math.max(...list.map(r => r.safety == null ? 0 : r.safety));
+    const hit = MAP().pois.map(p => {
+      if (!p || !p.coords || names.has(p.name)) return null;
+      if (p.tier === 'S' || p.kind === 'major') return null;
+      if (!(p.kind === 'compound' || p.density <= 48)) return null;
+      const dist = GeoUtil.distToSegment(p.coords, App.flight.start, App.flight.end);
+      if (dist > 26) return null;
+      const safety = clamp(100 - (p.density || 40) * 1.25, 0, 100);
+      return { p, dist, safety, score: safety * 0.7 + clamp(100 - dist * 4, 0, 100) * 0.3 };
+    }).filter(Boolean).sort((a, b) => b.score - a.score)[0];
+    if (!hit || hit.safety <= safest) return null;
+    const p = hit.p;
+    const veh = this.vehNear(p.coords, 14);
+    return {
+      name: p.name, coords: p.coords, tier: p.tier, type: p.type, note: p.note,
+      kind: p.kind, loot: p.loot, density: p.density,
+      strategy: 'vehicle', styleLabel: '沿航线的边缘房',
+      total: hit.score, stars: clamp(hit.safety / 100 * 5, 0, 5),
+      breakdown: [
+        ['落点安全', Math.round(hit.safety)],
+        ['离航线', Math.round(clamp(100 - hit.dist * 4, 0, 100))]
+      ],
+      extra: [
+        hit.safety >= 40
+          ? '城区落点都不安全，可以先落在这里发育，再沿公路找车转移'
+          : '比上面的城区安全一些，可以先落在这里，再沿公路找车',
+        veh.best
+          ? `最近载具：${veh.best.v.type}（${Fmt.m(veh.best.d)} 米，${veh.best.k}刷新）`
+          : '附近没有固定刷车点，落地后先搜完再沿公路找车'
+      ],
+      flightDist: hit.dist,
+      safety: Math.round(hit.safety),
+      risk: false,
+      why: '',
+      edge: true
+    };
+  },
+
+  /* 推荐生成后再改文案：转移目标避开另外几个推荐点，并写出排第一的原因。
+   * 三条安全分都低于 40 时只在列表顶上提示；某一条比最安全的那条低 15 分以上，才单独标高风险。 */
+  decorateRecommend(list) {
+    const names = new Set(list.map(r => r.name));
+    list.forEach(r => {
+      const idx = (r.extra || []).findIndex(s => s.indexOf('建议开往') >= 0);
+      if (idx >= 0) {
+        const alt = this.reachTarget(r.coords, r.name).find(t => !names.has(t.p.name));
+        r.extra[idx] = alt
+          ? `拿车后建议开往 ${alt.p.name}（${Fmt.m(alt.d)} 米，资源 ${alt.p.loot}、密度 ${alt.p.density}）`
+          : '周边没有特别合适的转移目标，可以沿公路向圈心方向找房区';
+      }
+      r.safety = this.safetyScore(r);
+      r.risk = false;
+      r.why = '';
+    });
+    const known = list.filter(r => r.safety != null);
+    const safest = known.length ? Math.max(...known.map(r => r.safety)) : 100;
+    App.game.recommendWarn = known.length > 0 && known.every(r => r.safety < 40);
+    known.forEach(r => {
+      if (r.safety < 40 && safest - r.safety >= 15) r.risk = true;
+    });
+    if (list[0] && !list[0].edge) {
+      if (App.game.recommendWarn && list[0].safety != null && list[0].safety < 40) {
+        list[0].why = '这几条城区里它相对最安全，所以排第一';
+      } else {
+        const top = (list[0].breakdown || []).slice().sort((a, b) => b[1] - a[1])[0];
+        list[0].why = top ? `${top[0]}最高，所以排第一` : '';
+      }
+      if (list[0].risk) list[0].why += (list[0].why ? '。' : '') + '落地风险高';
+    }
   },
 
   showRecommend() {
@@ -849,15 +1010,17 @@ const Game = {
     box.innerHTML = `
       <div class="section-title">🎯 「${st ? st.name : ''}」推荐跳点（5 星制）</div>
       <p class="hint">${st ? st.rule : ''}</p>
+      ${g.recommendWarn ? '<p class="rec-warn">这条航线附近的城区都不安全</p>' : ''}
       ${g.recommend.map((r, i) => `
-        <div class="rec-card${g.chosen && g.chosen.name === r.name ? ' active' : ''}" data-i="${i}">
+        <div class="rec-card${g.chosen && g.chosen.name === r.name ? ' active' : ''}${r.risk ? ' risk' : ''}${r.edge ? ' edge' : ''}" data-i="${i}">
           <div class="rec-top">
-            <span class="rec-rank">${i + 1}</span>
+            <span class="rec-rank">${r.edge ? '边' : i + 1}</span>
             <div class="rec-main">
               <b>${r.name}</b>
-              <span class="rec-kind">${r.kind === 'compound' ? '野区房群' : (r.type || '点位')}</span>
+              <span class="rec-kind">${r.edge ? '沿航线的边缘房' : (r.kind === 'compound' ? '野区房群' : (r.type || '点位'))}${r.risk ? ' · 高风险' : ''}</span>
+              ${r.why ? `<p class="rec-why">${r.why}</p>` : ''}
               <div class="stars">${starStr(r.stars)}<em>${r.stars.toFixed(1)}</em></div>
-              <p>${r.styleLabel}思路</p>
+              <p>${r.edge ? r.styleLabel : r.styleLabel + '思路'}</p>
             </div>
           </div>
           <div class="rec-bars">
@@ -1004,6 +1167,11 @@ const Game = {
     App.game.planPhase = phase;
     const ph = rules.phases[clamp(phase, 1, 8) - 1];
     if (g.remain == null) g.remain = ph.wait;
+    if (!g.compTouched) g.compSize = clamp((+g.followers || 0) + 1, 1, 4);
+    const radiusPct = App.circles[phase]
+      ? App.circles[phase].r
+      : (App.circleEdit && App.circleEdit.phase === phase ? App.circleEdit.r : circleRadiusPct(App.mapId, phase));
+    const radiusM = Math.round(radiusPct * 80);
 
     $('#inspector').innerHTML = `
       <div class="insp-head">
@@ -1020,8 +1188,8 @@ const Game = {
               </button>`).join('')}
           </div>
           <div class="note-box small">
-            <p>当前 <b>第 ${phase} 圈</b>：地图上已按该圈实际大小（半径约 <b>${circleRadiusM(App.mapId, phase)}m</b>）生成圈形。
-              <b>按住圈拖动</b>放到实际位置，拖右侧方块可改半径；放好后点「✅ 确定这一圈」，会自动进入下一圈继续设置。</p>
+            <p>当前 <b>第 ${phase} 圈</b>，半径 <b id="radiusNote">${radiusM} 米</b>。
+              <b>按住圈内拖动</b>放到实际位置，拖右侧方块可改半径。地图上只标圈号。放好后点「✅ 确定这一圈」，会自动进入下一圈继续设置。</p>
           </div>
           <div class="circle-tools">
             <button class="tool-btn" id="confirmCircle">✅ 确定第 ${phase} 圈</button>
@@ -1029,9 +1197,8 @@ const Game = {
             <button class="ghost-btn" id="clearCircle">🗑 清除本圈</button>
           </div>
           <label class="field" style="margin-top:10px">
-            <span>半径：<b id="rLabel">${Math.round((App.circles[phase] ? App.circles[phase].r : circleRadiusPct(App.mapId, phase)) * 80)} m</b></span>
-            <input type="range" id="rRange" min="10" max="2400" step="10"
-              value="${Math.round((App.circles[phase] ? App.circles[phase].r : circleRadiusPct(App.mapId, phase)) * 80)}">
+            <span>半径：<b id="rLabel">${radiusM} 米</b></span>
+            <input type="range" id="rRange" min="10" max="2400" step="10" value="${radiusM}">
           </label>
           <div class="circle-summary">
             ${[1, 2, 3, 4, 5, 6, 7, 8].filter(n => App.circles[n]).map(n =>
@@ -1111,7 +1278,11 @@ const Game = {
       g.remain = CIRCLE_RULES[g.circleMode].phases[clamp(App.game.planPhase, 1, 8) - 1].wait;
       this.renderStep3();
     });
-    $$('#compRow .seg-btn').forEach(b => b.onclick = () => { g.compSize = +b.dataset.n; this.renderStep3(); });
+    $$('#compRow .seg-btn').forEach(b => b.onclick = () => {
+      g.compSize = +b.dataset.n;
+      g.compTouched = true;
+      this.renderStep3();
+    });
     $$('#phaseRow .phase-btn').forEach(b => b.onclick = () => {
       App.game.planPhase = +b.dataset.phase;
       App.game.phase = App.game.planPhase;
@@ -1128,7 +1299,7 @@ const Game = {
     const r = $('#rRange');
     if (r) r.oninput = () => {
       const mm = +r.value;
-      $('#rLabel').textContent = mm + ' m';
+      this.syncRadius(mm);
       if (App.circleEdit) {
         App.circleEdit.r = mm / 80;
         if (App.circleEdit.phase > 1 && App.circles[App.circleEdit.phase - 1]) {
@@ -1172,6 +1343,13 @@ const Game = {
       pb.textContent = `🔮 预测第 ${Math.min(8, Math.max(...ps, 0) + 1)} 圈`;
     };
     $('#genPlan').onclick = () => this.genPlan();
+  },
+
+  syncRadius(mm) {
+    const label = $('#rLabel');
+    if (label) label.textContent = mm + ' 米';
+    const note = $('#radiusNote');
+    if (note) note.textContent = mm + ' 米';
   },
 
   /* 分 / 秒 双步进器：两边都能用箭头加减，改动立即同步倒计时 */
@@ -1339,10 +1517,11 @@ const Game = {
       if (fixed && !exists) toast('已自动把第 ' + phase + ' 圈放在第 ' + (phase - 1) + ' 圈内部');
     }
     const rr = $('#rRange');
-    if (rr) { rr.value = Math.round(App.circleEdit.r * 80); $('#rLabel').textContent = Math.round(App.circleEdit.r * 80) + ' m'; }
+    if (rr) { rr.value = Math.round(App.circleEdit.r * 80); this.syncRadius(Math.round(App.circleEdit.r * 80)); }
     App.circle = App.circleEdit;
     this.paintCircleEditor();
     MapView.renderOverlay();
+    MapView.fitCircle(App.circleEdit);
   },
 
   paintCircleEditor() {
@@ -1352,48 +1531,48 @@ const Game = {
     if (!ed || App.mode !== 'game') { svg.innerHTML = ''; return; }
     const locked = !!App.circles[ed.phase];
     const parent = ed.phase > 1 ? App.circles[ed.phase - 1] : null;
+    const px = (MapView.baseW * App.zoom) / 100 || 7;
+    const hs = Math.max(2.4, 28 / px);
+    const labelLeft = ed.cx + ed.r > 88;
     svg.innerHTML = `
       <circle cx="${ed.cx}" cy="${ed.cy}" r="${ed.r}" class="edit-circle${locked ? ' locked' : ''}"/>
       <circle cx="${ed.cx}" cy="${ed.cy}" r="0.9" class="edit-center"/>
-      <rect x="${ed.cx + ed.r - 1.1}" y="${ed.cy - 1.1}" width="2.2" height="2.2" rx="0.4" class="edit-handle"/>
+      <rect x="${ed.cx + ed.r - hs / 2}" y="${ed.cy - hs / 2}" width="${hs}" height="${hs}" rx="0.35" class="edit-handle"/>
       <line x1="${ed.cx}" y1="${ed.cy}" x2="${ed.cx + ed.r}" y2="${ed.cy}" class="edit-radius"/>
-      <text x="${ed.cx}" y="${ed.cy - ed.r - 1.8}" class="edit-label">第 ${ed.phase} 圈 · ${Math.round(ed.r * 80)}m${locked ? '（已确定·可再拖动微调）' : '（拖动我）'}</text>
-      ${parent ? `<text x="${parent.cx}" y="${parent.cy + parent.r + 2.2}" class="edit-label parent">必须完整落在第 ${ed.phase - 1} 圈内（虚线大圈）</text>` : ''}`;
-    this.bindCircleDrag();
+      <text x="${labelLeft ? ed.cx + ed.r - hs / 2 - 0.8 : ed.cx + ed.r + hs / 2 + 0.8}" y="${ed.cy + 0.7}" class="edit-label" style="text-anchor:${labelLeft ? 'end' : 'start'}">第 ${ed.phase} 圈</text>
+      ${parent ? `<text x="${parent.cx}" y="${parent.cy + parent.r + 2.2}" class="edit-label parent">必须完整落在第 ${ed.phase - 1} 圈内</text>` : ''}`;
   },
 
-  bindCircleDrag() {
-    const svg = $('#editSvg'), stage = $('#mapStage');
-    if (!svg || !stage) return;
-    const circle = svg.querySelector('.edit-circle');
-    const handle = svg.querySelector('.edit-handle');
+  /* 圈内拖动、手柄改半径。平移监听看到圈命中后会进这里。 */
+  beginCircleDrag(mode, e) {
+    const stage = MapView.stage;
+    if (!stage) return;
     const apply = () => {
       const ed = App.circleEdit;
+      if (!ed) return;
       if (ed.phase > 1 && App.circles[ed.phase - 1]) this.clampInside(ed, App.circles[ed.phase - 1]);
       const rr = $('#rRange');
-      if (rr) { rr.value = Math.round(ed.r * 80); $('#rLabel').textContent = Math.round(ed.r * 80) + ' m'; }
+      if (rr) { rr.value = Math.round(ed.r * 80); this.syncRadius(Math.round(ed.r * 80)); }
       this.paintCircleEditor();
       MapView.renderOverlay();
     };
-    const startDrag = (mode) => (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const move = (ev) => {
-        const ed = App.circleEdit;
-        if (!ed) return;
-        const pt = MapView.toPercent(ev.clientX, ev.clientY);
-        if (mode === 'move') { ed.cx = pt[0]; ed.cy = pt[1]; }
-        else { ed.r = clamp(Math.hypot(pt[0] - ed.cx, pt[1] - ed.cy), 0.15, 30); }
-        apply();
-      };
-      const up = () => {
-        stage.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', up);
-      };
-      stage.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', up);
+    const move = (ev) => {
+      const ed = App.circleEdit;
+      if (!ed) return;
+      if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > 4) App.dragged = true;
+      const pt = MapView.toPercent(ev.clientX, ev.clientY);
+      if (mode === 'move') { ed.cx = pt[0]; ed.cy = pt[1]; }
+      else ed.r = clamp(Math.hypot(pt[0] - ed.cx, pt[1] - ed.cy), 0.15, 30);
+      apply();
     };
-    if (circle) circle.addEventListener('pointerdown', startDrag('move'));
-    if (handle) handle.addEventListener('pointerdown', startDrag('resize'));
+    const up = (ev) => {
+      stage.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      try { stage.releasePointerCapture(ev.pointerId); } catch (_) { }
+    };
+    stage.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    try { stage.setPointerCapture(e.pointerId); } catch (_) { }
   },
 
   confirmCircle() {
@@ -1434,7 +1613,7 @@ const Game = {
       return Fmt.parse(node.value, fallback);
     };
     const rules = CIRCLE_RULES[g.circleMode];
-    g.remain = readNum('#remainIn', g.remain == null ? rules.phases[phase - 1].wait : g.remain);
+    g.remain = this.readTime(g.remain == null ? rules.phases[phase - 1].wait : g.remain);
     g.players = readNum('#playersIn', g.players || 50);
 
     const rule = rules.phases[phase - 1];
@@ -1619,7 +1798,9 @@ const Game = {
     const travelBest = Math.min(...plan.routes.map(r => r.time));
     const buffer = 12;
     const leaveIn = plan.remain - travelBest - buffer;
-    const advice = leaveIn > 25
+    const advice = plan.remain === 0
+      ? `按最快这条路线，进圈大约需要 <b>${Fmt.zhDur(travelBest)}</b>。这是计划圈，不会自动缩小。`
+      : leaveIn > 25
       ? `<b class="ok">还能再等 ${Fmt.mmss(leaveIn)}</b> 再出发：先用这段时间搜完当前房区 / 卡一波过路人。`
       : leaveIn > 0
         ? `<b class="warn">${Fmt.mmss(leaveIn)} 后必须出发</b>：最快路线需要 ${Fmt.mmss(travelBest)}，已预留 ${buffer}s 找车与意外缓冲。`
@@ -1643,7 +1824,7 @@ const Game = {
       </div>
       <div class="section-title">🎯 下个圈推荐站位</div>
       <p class="hint">来源：${plan.estFrom}${plan.matchScore ? ` · 相似度 ${plan.matchScore}%` : ''}<br>
-        预估中心 ${plan.target.coords[0].toFixed(0)}, ${plan.target.coords[1].toFixed(0)} · 半径约 ${Math.round(plan.target.radius * 80)}m
+        预估中心 ${CirclePredictor.placeNear(plan.target.coords[0], plan.target.coords[1])} · 半径约 ${Math.round(plan.target.radius * 80)} 米
         <button class="ghost-btn mini" onclick="MapView.focus(App.game.plan.target.coords,2.6)">📍 定位</button></p>
 
       <div class="section-title">🛣 行进路线（点选查看，地图上会高亮并标出每一步）</div>
@@ -1755,14 +1936,20 @@ const Game = {
     const clusters = this.clustersNear(p, 14);
     const ter = (m.terrains || []).map(t => ({ t, d: GeoUtil.dist(t.coords, p) }))
       .filter(x => x.d <= 12).sort((a, b) => a.d - b.d);
-    if (veh.bestFixed) out.push(`固定载具：${veh.bestFixed.v.type} 在 ${Fmt.m(veh.bestFixed.d)} 处（${veh.bestFixed.v.location}），转移前先把车停到背坡。`);
-    else if (veh.best) out.push(`附近没有固定载具点，最近的 ${veh.best.v.type} 在 ${Fmt.m(veh.best.d)}（${veh.best.k}刷新），要提前规划步行路线。`);
+    if (veh.bestFixed) out.push(`固定载具：${veh.bestFixed.v.type} 在 ${Fmt.m(veh.bestFixed.d)} 米处（${veh.bestFixed.v.location}），转移前先把车停到背坡。`);
+    else if (veh.best) out.push(`附近没有固定载具点，最近的 ${veh.best.v.type} 在 ${Fmt.m(veh.best.d)} 米（${veh.best.k}刷新），要提前规划步行路线。`);
     else out.push('这一带没有任何载具刷新点，进圈只能靠步行或飘伞，务必提前出发。');
-    if (clusters.length) out.push(`可轮转房群 ${clusters.length} 个：${clusters.slice(0, 3).map(c => c.p.name).join('、')}，搜完一处直接转下一处，不要在同一个点停太久。`);
+    if (clusters.length) {
+      const shown = clusters.slice(0, 3);
+      const head = clusters.length > shown.length
+        ? `附近 ${clusters.length} 个房群，先去这 ${shown.length} 个：${shown.map(c => c.p.name).join('、')}`
+        : `附近 ${clusters.length} 个房群可轮转：${shown.map(c => c.p.name).join('、')}`;
+      out.push(head + '，搜完一处直接转下一处，不要在同一个点停太久。');
+    }
     if (ter.length) out.push(`最近掩体：${ter.slice(0, 2).map(x => TERRAIN_CATS[x.t.cat].name + '·' + x.t.name).join('、')}，打架或躲枪线优先往这里走。`);
     const big = m.pois.filter(x => x.kind !== 'compound' && x.density >= 70 && GeoUtil.dist(x.coords, p) < 18)
       .sort((a, b) => GeoUtil.dist(a.coords, p) - GeoUtil.dist(b.coords, p))[0];
-    if (big) out.push(`注意高密度区「${big.name}」在 ${Fmt.m(GeoUtil.dist(big.coords, p))} 处，转移路线尽量绕开它。`);
+    if (big) out.push(`注意高密度区「${big.name}」在 ${Fmt.m(GeoUtil.dist(big.coords, p))} 米处，转移路线尽量绕开它。`);
     out.push('圈形规则：下一个信号区一定完整包含在当前圈内，圈心最多只会移动「当前圈半径 − 下一圈半径」的距离。');
     return out;
   },
@@ -1924,7 +2111,7 @@ const PlanCard = {
     const note = (label, val) => {
       x.fillStyle = INK; x.font = '700 24px ' + SERIF; x.fillText(label, 60, iy);
       x.fillStyle = INK2; x.font = '500 23px ' + SERIF;
-      x.fillText(String(val).slice(0, 26), 190, iy);
+      x.fillText(String(val).slice(0, 32), 190, iy);
       iy += 46;
     };
     const styleName = (LANDING_STYLES.find(t => t.id === g.style) || {}).name || '未定';
@@ -1933,7 +2120,7 @@ const PlanCard = {
     note('落点', g.chosen ? g.chosen.name : (App.pin ? '自择之点' : '未定'));
     note('圈形', cphases.length ? '已定' + numCN[cphases.length] + '圈，末圈径' + Math.round((App.circles[lastPh].r * 80) / 100) + '里' : '未定');
     if (App.prediction && !App.prediction.error && App.prediction.hold) {
-      note('推演', '候选区一其率' + Math.round((App.prediction.top[0].prob || 0) * 100) + '%，宜先据' + App.prediction.hold.name);
+      note('推演', '候选区一，概率 ' + Math.round((App.prediction.top[0].prob || 0) * 100) + '%，宜先占' + App.prediction.hold.name);
     }
     note('兵法', '听声辨路，择静而行');
 
@@ -1950,7 +2137,9 @@ const PlanCard = {
     x.restore();
 
     const a = document.createElement('a');
-    a.download = '沙盘志-' + m.name + '-' + Date.now() + '.png';
+    const day = new Date();
+    const p2 = n => String(n).padStart(2, '0');
+    a.download = '沙盘志-' + m.name + '-' + day.getFullYear() + '-' + p2(day.getMonth() + 1) + '-' + p2(day.getDate()) + '.png';
     a.href = c.toDataURL('image/png');
     a.click();
     toast('📜 沙盘志方案卡已生成');
@@ -2081,15 +2270,23 @@ const GameHUD = {
     if (dot) dot.className = 'hud-dot ' + (plan.inCircle ? 'in' : 'out');
     set('hudMode', plan.modeName);
     set('hudPhase', ` · 第 ${plan.phase} 圈 · 圈外 ${plan.dps}/s`);
-    set('hudClock', left === 0 ? '缩圈中' : '距缩圈 ' + Fmt.mmss(left));
+    set('hudClock', left === 0 ? '计划圈，不会自动缩小' : '距缩圈 ' + Fmt.mmss(left));
     const clk = document.getElementById('hudClock');
     if (clk) clk.className = 'hud-clock' + (left === 0 ? ' zero' : '');
     const adv = document.getElementById('hudAdvice');
     if (adv) {
-      adv.className = 'hud-advice ' + (go <= 0 ? 'danger' : go < 25 ? 'warn' : 'ok');
-      adv.textContent = go <= 0 ? `⚠️ 立刻出发（晚了 ${Fmt.mmss(-go)}）` : `建议 ${Fmt.mmss(go)} 后出发`;
+      if (left === 0) {
+        adv.className = 'hud-advice ok';
+        adv.textContent = '按这条路线，进圈大约需要 ' + Fmt.zhDur(travel);
+      } else {
+        adv.className = 'hud-advice ' + (go <= 0 ? 'danger' : go < 25 ? 'warn' : 'ok');
+        adv.textContent = go <= 0 ? `⚠️ 立刻出发（晚了 ${Fmt.mmss(-go)}）` : `建议 ${Fmt.mmss(go)} 后出发`;
+      }
     }
-    set('hudSub', `起点 ${plan.from.map(x => x.toFixed(0)).join(',')} → 目标 ${plan.target.coords.map(x => x.toFixed(0)).join(',')} · 最快 ${Fmt.mmss(travel)}`);
+    const fromName = CirclePredictor.placeNear(plan.from[0], plan.from[1]);
+    const toName = CirclePredictor.placeNear(plan.target.coords[0], plan.target.coords[1]);
+    const apart = Fmt.m(GeoUtil.dist(plan.from, plan.target.coords));
+    set('hudSub', `从 ${fromName} 到 ${toName}，相距 ${apart} 米 · 最快 ${Fmt.mmss(travel)}`);
     if (left === 0) { clearInterval(this._t); this._t = null; }
   },
 
@@ -2138,6 +2335,7 @@ const GameHUD = {
 };
 
 window.Game = Game;
+window.CirclePredictor = CirclePredictor;
 window.GameSidebar = GameSidebar;
 window.GameHUD = GameHUD;
 window.exitGameMode = exitGameMode;
