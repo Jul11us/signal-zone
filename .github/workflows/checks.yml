@@ -1,0 +1,26 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: JavaScript and share security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse application scripts
+        run: |
+          node --check app-core.js
+          node --check app-game.js
+          node --check data-v4.js
+          node --check pano.js
+      - name: Check sharing and bookmark input handling
+        run: node --test tests/share-security.test.cjs

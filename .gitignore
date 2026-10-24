@@ -1,0 +1,22 @@
+# Local design explorations, conversations and verification captures
+design-demos/
+gui-test-screenshots/
+预览图/
+_verify/
+地图点位核对报告.md
+
+# Local configuration and generated files
+.env
+.env.*
+!.env.example
+.scratch/
+.local/
+node_modules/
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.pem
+*.key
