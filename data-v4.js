@@ -1,5 +1,5 @@
 /* =========================================================================
- * 战术视界 · 和平精英综合情报站  v4.0
+ * 信号圈 SIGNAL//ZONE · 和平精英战术地图情报  v5.0
  * data-v4.js —— 数据层
  * 坐标体系：所有 coords 均为 [x百分比, y百分比]，相对地图图片左上角
  * ========================================================================= */
@@ -9,7 +9,7 @@ const TERRAIN_CATS = {
   reverseSlope:  { name: '反坡',        icon: '⛰',  color: '#f0a63e', group: '地形', desc: '背向敌人的斜坡，可低姿态接近并遮挡视线' },
   pit:           { name: '凹坑',        icon: '🕳',  color: '#a78bfa', group: '地形', desc: '天然下凹地形，可蹲伏躲避子弹' },
   toilet:        { name: '厕所',        icon: '🚻', color: '#94a3b8', group: '房型', desc: '独立小建筑，单面出入口，极易被围' },
-  house:         { name: '房型',        icon: '🏠', color: '#5bd1e8', group: '房型', desc: '各类建筑结构、楼层与卡点分析' },
+  house:         { name: '房型',        icon: '🏠', color: '#8fa9b8', group: '房型', desc: '各类建筑结构、楼层与卡点分析' },
   tower:         { name: '炮楼',        icon: '🗼', color: '#fb7a99', group: '房型', desc: '高台建筑，视野压制强但暴露度也高' },
   gasStation:    { name: '加油站',      icon: '⛽', color: '#ff9350', group: '设施', desc: '载具刷新集中区，转移与卡点枢纽' },
   bunker:        { name: '防空洞',      icon: '🚪', color: '#7c8da6', group: '设施', desc: '地下空间，出入口少，决赛圈苟分首选' },
@@ -29,7 +29,7 @@ const TERRAIN_CATS = {
 
 /* ------------------------- 载具分类（车 马 飞机 船 鹿） ------------------------- */
 const VEHICLE_CATS = {
-  car:   { name: '车',   icon: '🚗', color: '#5bd1e8' },
+  car:   { name: '车',   icon: '🚗', color: '#8fa9b8' },
   horse: { name: '马',   icon: '🐎', color: '#f0a63e' },
   plane: { name: '飞机', icon: '🚁', color: '#d78cf5' },
   boat:  { name: '船',   icon: '🚤', color: '#45d6e5' },

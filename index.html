@@ -13,7 +13,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;0,800;1,700;1,800&family=Noto+Sans+SC:wght@400;500;700;900&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="styles-v4.css?v=26" />
+  <link rel="stylesheet" href="styles-v4.css?v=30" />
 </head>
 
 <body>
@@ -83,6 +83,10 @@
     <!-- 地图区 -->
     <main class="map-area">
       <div class="map-toolbar" id="mapToolbar">
+        <button class="tool-btn sidebar-toggle" id="toggleSidebar" aria-controls="sidebar" aria-expanded="true" title="收起侧栏，为地图腾出空间">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 2.5v11M9.5 6l-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>收起侧栏</span>
+        </button>
         <button class="tool-btn" data-tool="flight" data-game-only title="在地图上点两下：起点 → 终点">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M14.5 1.5 7 9M14.5 1.5 9.7 14l-2.2-5.3L2 6.6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
           航线
@@ -157,10 +161,10 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <!-- ============================ 脚本 ============================ -->
-  <script src="data-v4.js?v=21"></script>
+  <script src="data-v4.js?v=30"></script>
   <script src="pano.js?v=21"></script>
-  <script src="app-core.js?v=27"></script>
-  <script src="app-game.js?v=27"></script>
+  <script src="app-core.js?v=30"></script>
+  <script src="app-game.js?v=30"></script>
   <script>
     // 地图底图：每次换图淡入（含缓存场景）
     (function () {

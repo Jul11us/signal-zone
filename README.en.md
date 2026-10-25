@@ -60,14 +60,16 @@ A 1080 × 1500 PNG with a paper field-manual layout, available from the planning
 
 | Stage | What you can do |
 | :--- | :--- |
-| **Intelligence** | Switch between three maps, search locations, combine compound, density, vehicle, and 19 terrain-category layers, and inspect tactical notes. |
+| **Intelligence** | Switch between three maps, search locations, use Drop / Vehicles / Rotation layer presets, combine 19 terrain categories, and collapse the sidebar to focus on the map. |
 | **Drop planning** | Choose a playstyle, draw a flight path, and inspect estimated congestion. Vehicle-first plans prioritize safety scores and may add an outlying compound when all suggested towns are risky. |
-| **Rotation** | Mark a landing point, drag zones from inside the circle, resize with a handle, and review nearby place names, route suggestions, timing, and squad roles. |
+| **Rotation** | Mark a landing point, drag and resize zones, and review illustrative routes and squad roles. Departure advice follows the selected route. |
 | **Zone scenarios** | Sample 600 candidate centers within a geometric constraint and score them using water, resources, cover, and movement factors. |
-| **Sharing** | Restore the same map, flight path, zones, and pin through a share link, or export a field briefing as a PNG. |
+| **Sharing** | Restore flight paths, zones, landing points, playstyle, phase, and squad settings to continue planning. Legacy links remain supported; export a field briefing as a PNG. |
 | **Review** | Save observed circles, review retrospective candidate-region hits and distance errors, and experiment with local weight adjustments after enough adjacent-circle samples. |
 
 Also includes a strategy playbook, personal bookmarks, procedural 360° terrain illustrations, marker decluttering, viewport culling, and keyboard zoom controls.
+
+Bookmarks belong to their creation map. Legacy bookmarks without map information stay in an unassigned list until you assign them to the correct map.
 
 ### Plan a match in four steps
 
@@ -111,6 +113,8 @@ There are no application dependencies, frontend build steps, or backend configur
 ### Data and limits
 
 **Zone scenarios support discussion.** Candidate regions use heuristic scoring, and displayed scores are relative model weights. Accuracy has not been validated against real matches. Reference radii include PUBG PC measurements and estimates; geometric constraints depend on those parameters and the supplied circles. They cannot guarantee the next mobile-game zone. Congestion is also a static estimate.
+
+Routes are illustrative connections between reference points; roads, water crossings, and mountain access have not been checked. Estimates use 5.8 m/s walking and 19.5 m/s driving, including the listed vehicle pickup, search, and observation stops. Safety and resource values are model reference scores.
 
 Locations, resource ratings, vehicles, and tactical notes are curated reference data and may change with game updates. The playbook explains strategy concepts rather than current official competition rules. The bundled 360° views are procedural illustrations; terrain photographs are not included. See the [asset directory instructions](assets/terrain/README.txt) to add your own images.
 

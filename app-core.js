@@ -12,8 +12,8 @@ const App = {
   dragStart: { x: 0, y: 0 },
   selected: null,          // {kind, id}
   layers: {
-    pois: true, compounds: true, density: true, labels: true,
-    vehFixed: true, vehPeriodic: true, vehSpecial: true,
+    pois: true, compounds: false, density: false, labels: true,
+    vehFixed: false, vehPeriodic: false, vehSpecial: false,
     fav: true,
     terrain: {},           // cat -> bool
     routes: true, circle: true, flight: true
@@ -84,14 +84,26 @@ const Pins = {
   key: 'zd_pins_v1',
   load() {
     if (!App.custom) {
-      try { App.custom = JSON.parse(localStorage.getItem(this.key)) || []; }
+      try {
+        const saved = JSON.parse(localStorage.getItem(this.key));
+        App.custom = Array.isArray(saved) ? saved : [];
+      }
       catch (e) { App.custom = []; }
     }
     return App.custom;
   },
+  current(mapId = App.mapId) { return this.load().filter(p => p && p.mapId === mapId); },
+  unassigned() { return this.load().filter(p => p && !Object.prototype.hasOwnProperty.call(MAP_DATA, p.mapId)); },
+  assign(id, mapId) {
+    if (!Object.prototype.hasOwnProperty.call(MAP_DATA, mapId)) return false;
+    const p = this.load().find(q => q && q.id === id);
+    if (!p) return false;
+    p.mapId = mapId; this.save();
+    return true;
+  },
   save() { try { localStorage.setItem(this.key, JSON.stringify(App.custom || [])); } catch (e) { } },
   add(x, y) {
-    const p = { id: 'pin_' + Date.now(), name: '我的点位 ' + (this.load().length + 1), coords: [+x.toFixed(1), +y.toFixed(1)], note: '' };
+    const p = { id: 'pin_' + Date.now(), mapId: App.mapId, name: '我的点位 ' + (this.load().length + 1), coords: [+x.toFixed(1), +y.toFixed(1)], note: '' };
     App.custom.push(p); this.save();
     return p;
   },
@@ -112,11 +124,18 @@ const Pins = {
  * ========================================================= */
 const ShareLink = {
   encode() {
+    const g = App.game;
     const st = {
-      v: 1, map: App.mapId,
+      v: 2, map: App.mapId,
       flight: App.flight && App.flight.start && App.flight.end ? [App.flight.start, App.flight.end] : null,
       circles: Object.keys(App.circles || {}).length ? App.circles : null,
-      pin: App.pin ? App.pin.coords : null
+      pin: App.pin ? App.pin.coords : null,
+      game: {
+        chosen: g.chosen ? g.chosen.coords : null,
+        style: g.style, followers: g.followers, planPhase: g.planPhase, phase: g.phase,
+        phasePos: g.phasePos, circleMode: g.circleMode, remain: g.remain,
+        players: g.players, teams: g.teams, compSize: g.compSize
+      }
     };
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(st))));
     return location.origin + location.pathname + '#z=' + b64;
@@ -142,7 +161,7 @@ const ShareLink = {
     if (!m) return false;
     let st = null;
     try { st = JSON.parse(decodeURIComponent(escape(atob(m[1])))); } catch (e) { return false; }
-    if (!st || st.v !== 1) return false;
+    if (!st || (st.v !== 1 && st.v !== 2)) return false;
     const ok = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100;
     const point = p => Array.isArray(p) && p.length === 2 && p.every(ok);
     setMap(Object.prototype.hasOwnProperty.call(MAP_DATA, st.map) ? st.map : 'island', true);
@@ -158,8 +177,40 @@ const ShareLink = {
       }
     });
     App.pin = point(st.pin) ? { coords: st.pin } : null;
+    const input = st.v === 2 && st.game && typeof st.game === 'object' ? st.game : {};
+    const integer = (n, min, max, fallback) => Number.isInteger(n) && n >= min && n <= max ? n : fallback;
+    const phaseKeys = Object.keys(App.circles).map(Number);
+    const defaultPhase = phaseKeys.length ? Math.max(...phaseKeys) : 1;
+    const chosenCoords = point(input.chosen) ? input.chosen : App.pin && App.pin.coords;
+    // Link labels are untrusted. Rebuild the identity from this map's own data.
+    const known = chosenCoords && (MAP().pois || []).find(p => p.coords.every((n, i) => Math.abs(n - chosenCoords[i]) < 0.001));
+    const chosen = chosenCoords ? {
+      name: known ? known.name : '分享落点', coords: chosenCoords,
+      type: known ? known.type : '大头针', tier: known && known.tier || '-'
+    } : null;
+    const phasePos = {};
+    if (input.phasePos && typeof input.phasePos === 'object') Object.keys(input.phasePos).forEach(k => {
+      const phase = Number(k);
+      if (Number.isInteger(phase) && phase >= 1 && phase <= 8 && point(input.phasePos[k])) phasePos[phase] = input.phasePos[k];
+    });
+    const followers = integer(input.followers, 0, 3, 0);
+    Object.assign(App.game, {
+      chosen, style: (window.LANDING_STYLES || []).some(s => s.id === input.style) ? input.style : null,
+      followers, phasePos, planPhase: integer(input.planPhase, 1, 8, defaultPhase),
+      phase: integer(input.phase, 1, 8, defaultPhase),
+      circleMode: Object.prototype.hasOwnProperty.call(window.CIRCLE_RULES || {}, input.circleMode) ? input.circleMode : 'ranked',
+      remain: typeof input.remain === 'number' && Number.isFinite(input.remain) && input.remain >= 0 && input.remain <= 7200 ? Math.round(input.remain) : null,
+      players: integer(input.players, 1, 100, 64), teams: integer(input.teams, 1, 100, 16),
+      compSize: integer(input.compSize, 1, 4, followers + 1),
+      compTouched: Number.isInteger(input.compSize) && input.compSize >= 1 && input.compSize <= 4,
+      plan: null, recommend: [], matches: []
+    });
+    if (chosen) App.pin = { coords: chosen.coords };
     MapView.renderAll();
-    if (App.flight && window.Game && App.mode === 'game') Game.onFlightReady();
+    if (window.Game && (chosen || App.flight || phaseKeys.length)) {
+      setMode('game');
+      Game.goStep(phaseKeys.length ? 3 : chosen ? 2 : 1);
+    }
     const parts = [App.flight ? '航线' : null, Object.keys(App.circles).length ? Object.keys(App.circles).length + ' 个圈形' : null, App.pin ? '选点' : null].filter(Boolean);
     toast('📥 已载入分享方案：' + MAP().name + (parts.length ? '（' + parts.join(' + ') + '）' : ''));
     history.replaceState(null, '', location.pathname + location.search);
@@ -274,7 +325,7 @@ const MapView = {
         this.renderMarkers();
         Inspector.terrain(m.terrains.find(t => t.id === mk.dataset.id));
       } else if (kind === 'fav') {
-        Inspector.favorite(Pins.load().find(q => q.id === mk.dataset.id));
+        Inspector.favorite(Pins.current().find(q => q.id === mk.dataset.id));
       } else if (kind === 'veh') {
         const list = mk.dataset.list;
         const arr = list === 'fixed' ? m.vehicles.fixed : list === 'periodic' ? m.vehicles.periodic : m.vehicles.special;
@@ -495,7 +546,8 @@ const MapView = {
 
     // 我的收藏点（本机持久化，右键地图添加）
     if (App.layers.fav) {
-      (Pins.load() || []).forEach(p => {
+      Pins.current().forEach(p => {
+        if (!Array.isArray(p.coords) || p.coords.length !== 2 || !p.coords.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100)) return;
         if (!this.inView(p.coords, VR)) return;
         const b = el('button', 'mk mk-fav');
         b.style.left = p.coords[0] + '%';
@@ -882,6 +934,21 @@ const Photos = {
 
 /* ============================ 检查器（右侧面板） ============================ */
 const Inspector = {
+  legacyPins() {
+    const pending = Pins.unassigned();
+    $('#inspector').innerHTML = `
+      <div class="insp-head"><div class="insp-title">★ 待归类收藏</div><div class="insp-sub">旧版记录已保留，请确认所属地图</div></div>
+      <div class="insp-body legacy-pins">
+        <p class="hint">旧版收藏没有记录地图，因此暂不显示在地图上。切换到对应地图后，点击「归入 ${MAP().name}」即可恢复显示。</p>
+        ${pending.length ? pending.map((p, i) => `<div class="note-box legacy-pin"><b>${escapeHTML(p.name)}</b><p>${escapeHTML(p.note || '')}</p>
+          <p class="dim">坐标：${escapeHTML(Array.isArray(p.coords) ? p.coords.join(', ') : '未知')}</p>
+          <button class="ghost-btn" data-assign-pin="${i}">归入 ${MAP().name}</button></div>`).join('') : '<p class="hint">所有收藏均已归类。</p>'}
+      </div>`;
+    $$('#inspector [data-assign-pin]').forEach(b => { b.onclick = () => {
+      const p = pending[+b.dataset.assignPin];
+      if (p && Pins.assign(p.id, App.mapId)) { MapView.renderMarkers(); Sidebar.render(); this.legacyPins(); toast(`收藏已归入${MAP().name}`); }
+    }; });
+  },
   /* 收藏点编辑：改名 / 备注 / 删除，即时持久化 */
   favorite(p) {
     if (!p) return;
@@ -901,7 +968,7 @@ const Inspector = {
           <button class="ghost-btn" onclick="Inspector.home()">← 返回总览</button>
           <button class="ghost-btn" id="favDel">🗑 删除此收藏</button>
         </div>
-        <p class="hint">收藏保存在本机浏览器，共 ${Pins.load().length} 个；地图上右键任意位置可继续添加。</p>
+        <p class="hint">${MAP().name}收藏 ${Pins.current().length} 个，保存在本机浏览器；地图上右键任意位置可继续添加。</p>
       </div>`;
     const nm = $('#favName'), nt = $('#favNote');
     nm.oninput = () => { Pins.update(p.id, { name: nm.value.slice(0, 24) || '未命名' }); MapView.renderMarkers(); };
@@ -1160,7 +1227,7 @@ const Inspector = {
     $('#inspector').innerHTML = `
       <div class="insp-head">
         <button class="back-btn" onclick="Inspector.home()">← 返回总览</button>
-        <div class="insp-title">🔍 搜索「${q}」</div>
+        <div class="insp-title">🔍 搜索「${escapeHTML(q)}」</div>
         <div class="insp-sub">${pois.length + ters.length + vehs.length} 条结果</div>
       </div>
       <div class="insp-body">
@@ -1184,17 +1251,19 @@ const Inspector = {
       };
       if (c.dataset.poi) {
         const p = m.pois.find(x => x.name === c.dataset.poi);
+        if (p) { App.layers[p.kind === 'compound' ? 'compounds' : 'pois'] = true; LayerPresets.sync(); Sidebar.render(); }
         Inspector.poi(p); if (p) go(p.coords, p.name);
       }
       else if (c.dataset.ter) {
         const t = m.terrains.find(x => x.id === c.dataset.ter);
+        if (t) { App.layers.terrain[t.cat] = true; LayerPresets.sync(); Sidebar.render(); }
         Inspector.terrain(t); if (t) go(t.coords, t.name);
       }
       else {
         const k = c.dataset.vehkind;
         const arr = k === '固定' ? m.vehicles.fixed : k === '定期' ? m.vehicles.periodic : m.vehicles.special;
         const v = arr.find(x => (x.id || x.location) === c.dataset.veh);
-        if (v) { Inspector.vehicle(v, k); go(v.coords, v.type); }
+        if (v) { App.layers[k === '固定' ? 'vehFixed' : k === '定期' ? 'vehPeriodic' : 'vehSpecial'] = true; LayerPresets.sync(); Sidebar.render(); Inspector.vehicle(v, k); go(v.coords, v.type); }
       }
     });
   }
@@ -1233,7 +1302,7 @@ const Sidebar = {
   render() {
     const m = MAP();
     if (App.mode === 'game') { GameSidebar.render(); return; }
-    const cats = Object.entries(TERRAIN_CATS);
+    const cats = Object.entries(TERRAIN_CATS).filter(([k]) => (m.terrains || []).some(t => t.cat === k));
     const groups = {};
     cats.forEach(([k, v]) => { (groups[v.group] = groups[v.group] || []).push([k, v]); });
 
@@ -1244,6 +1313,7 @@ const Sidebar = {
       </div>
       <div class="side-sec">
         <div class="side-title">🗂 图层</div>
+        ${LayerPresets.html()}
         ${[['pois', '主要点位'], ['compounds', '野区房群（小房区）'], ['density', '人口密度热区'], ['vehFixed', '固定载具刷新点'], ['vehPeriodic', '定期载具刷新点'], ['vehSpecial', '特殊载具（飞机/马/鹿/龙）'], ['fav', '★ 我的收藏（右键地图添加）']]
         .map(([k, n]) => `<label class="layer-row"><input type="checkbox" data-layer="${k}" ${App.layers[k] ? 'checked' : ''}><span>${n}</span></label>`).join('')}
       </div>
@@ -1268,12 +1338,14 @@ const Sidebar = {
         <button class="side-link" data-jump="veh">🚗 载具地图</button>
         <button class="side-link" data-jump="wild">🏡 野区房群（发育点）</button>
         <button class="side-link" id="sideShare">📤 复制分享链接</button>
+        ${Pins.unassigned().length ? `<button class="side-link" onclick="Inspector.legacyPins()">★ 待归类收藏 · ${Pins.unassigned().length}</button>` : ''}
       </div>`;
 
-    $$('#sidebar [data-layer]').forEach(i => i.onchange = () => { App.layers[i.dataset.layer] = i.checked; MapView.renderAll(); });
-    $$('#sidebar [data-ter]').forEach(i => i.onchange = () => { App.layers.terrain[i.dataset.ter] = i.checked; MapView.renderAll(); });
-    $('#terAll').onclick = () => { Object.keys(TERRAIN_CATS).forEach(k => App.layers.terrain[k] = true); this.render(); MapView.renderAll(); };
-    $('#terNone').onclick = () => { Object.keys(TERRAIN_CATS).forEach(k => App.layers.terrain[k] = false); this.render(); MapView.renderAll(); };
+    LayerPresets.bind();
+    $$('#sidebar [data-layer]').forEach(i => i.onchange = () => { App.layers[i.dataset.layer] = i.checked; LayerPresets.sync(); MapView.renderAll(); });
+    $$('#sidebar [data-ter]').forEach(i => i.onchange = () => { App.layers.terrain[i.dataset.ter] = i.checked; LayerPresets.sync(); MapView.renderAll(); });
+    $('#terAll').onclick = () => { Object.keys(TERRAIN_CATS).forEach(k => App.layers.terrain[k] = true); LayerPresets.sync(); this.render(); MapView.renderAll(); };
+    $('#terNone').onclick = () => { Object.keys(TERRAIN_CATS).forEach(k => App.layers.terrain[k] = false); LayerPresets.sync(); this.render(); MapView.renderAll(); };
     const shBtn = $('#sideShare');
     if (shBtn) shBtn.onclick = () => ShareLink.copy();
     const si = $('#sideSearch');
@@ -1286,10 +1358,7 @@ const Sidebar = {
     const m = MAP();
     if (kind !== 'veh') { App.layers.pois = true; }
     if (kind === 'veh') {
-      ['vehFixed', 'vehPeriodic', 'vehSpecial'].forEach(k => App.layers[k] = true);
-      App.layers.pois = false;
-      this.render(); MapView.renderAll();
-      toast('已只显示载具刷新点');
+      LayerPresets.apply('vehicle');
       return;
     }
     const map = {
@@ -1330,6 +1399,33 @@ const Sidebar = {
   }
 };
 
+/* 每个预设只控制情报图层，航线、圈形和路线保持可见。 */
+const LayerPresets = {
+  selected: 'drop',
+  settings: {
+    drop: { name: '跳点', layers: ['pois', 'compounds'], terrain: [] },
+    vehicle: { name: '找车', layers: ['pois', 'vehFixed', 'vehPeriodic', 'vehSpecial'], terrain: ['gasStation', 'bridge', 'ferryDock'] },
+    rotation: { name: '进圈', layers: ['pois', 'vehFixed'], terrain: ['reverseSlope', 'pit', 'hiddenSpot', 'relativeHigh', 'bridge', 'bunker', 'waterEdge', 'ferryDock'] }
+  },
+  html() {
+    return `<div class="layer-presets" role="group" aria-label="图层预设">${Object.entries(this.settings).map(([id, p]) =>
+      `<button class="layer-preset${this.selected === id ? ' active' : ''}" data-preset="${id}" aria-pressed="${this.selected === id}">${p.name}</button>`).join('')}</div>`;
+  },
+  apply(id, render = true) {
+    const p = this.settings[id];
+    if (!p) return;
+    this.selected = id;
+    ['pois', 'compounds', 'density', 'vehFixed', 'vehPeriodic', 'vehSpecial'].forEach(k => { App.layers[k] = p.layers.includes(k); });
+    Object.keys(TERRAIN_CATS).forEach(k => { App.layers.terrain[k] = p.terrain.includes(k); });
+    if (render) { Sidebar.render(); MapView.renderAll(); toast(`已切换到${p.name}图层`); }
+  },
+  bind() { $$('#sidebar [data-preset]').forEach(b => { b.onclick = () => this.apply(b.dataset.preset); }); },
+  sync() {
+    this.selected = null;
+    $$('#sidebar [data-preset]').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
+  }
+};
+
 /* ============================ 启动 ============================ */
 function setMap(id, silent) {
   Tools._flightVersion++;
@@ -1337,8 +1433,7 @@ function setMap(id, silent) {
   App.selected = null; App.flight = null; App.circle = null; App.routes = []; App.pin = null;
   if (window.Game) Game.reset();
   const m = MAP();
-  // 默认图层：全部地形开启
-  Object.keys(TERRAIN_CATS).forEach(k => { if (App.layers.terrain[k] === undefined) App.layers.terrain[k] = true; });
+  Object.keys(TERRAIN_CATS).forEach(k => { if (App.layers.terrain[k] === undefined) App.layers.terrain[k] = false; });
   const img = $('#mapImage');
   img.classList.remove('is-loaded');
   img.src = m.image;
@@ -1384,6 +1479,20 @@ function setMode(mode) {
 
 document.addEventListener('DOMContentLoaded', () => {
   MapView.init();
+  const sideToggle = $('#toggleSidebar');
+  const setSidebarCollapsed = collapsed => {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    if (sideToggle) {
+      sideToggle.setAttribute('aria-expanded', String(!collapsed));
+      sideToggle.title = collapsed ? '展开侧栏，查看图层与流程' : '收起侧栏，为地图腾出空间';
+      sideToggle.querySelector('span').textContent = collapsed ? '展开侧栏' : '收起侧栏';
+    }
+    MapView.fit(); MapView.updateTransform(); MapView.renderAll();
+  };
+  if (sideToggle) {
+    sideToggle.onclick = () => setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+    setSidebarCollapsed(!!(window.matchMedia && window.matchMedia('(max-width: 960px)').matches));
+  }
   $$('#mapTabs .map-tab').forEach(t => t.onclick = () => setMap(t.dataset.map));
   $$('#modeSwitch button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   $$('.tool-btn[data-tool]').forEach(b => b.onclick = () => Tools.set(b.dataset.tool === App.tool ? 'pan' : b.dataset.tool));
@@ -1410,7 +1519,7 @@ document.addEventListener('DOMContentLoaded', () => {
     MapView.renderMarkers();
     toast('已清除航线 / 圈形 / 路线 / 选点');
   };
-  Object.keys(TERRAIN_CATS).forEach(k => App.layers.terrain[k] = true);
+  LayerPresets.apply('drop', false);
   Pins.load();
   setMap('island', true);
   setMode('info');

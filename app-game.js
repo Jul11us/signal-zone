@@ -244,7 +244,7 @@ const CirclePredictor = {
       curPhase, nextPhase, rNext, maxD, samples: N,
       shrink: Math.pow(maxD / cur.r, 2),   // 可行域面积 / 当前圈面积
       top, flat, hold, heat,
-      note: cfg.note || '虚线圆为确定性结论，候选区概率为启发式估计'
+      note: cfg.note || '虚线圆来自参考半径与输入圈形；候选权重为模型参考分，未经真实命中率校准'
     };
   },
 
@@ -257,10 +257,10 @@ const CirclePredictor = {
         <div class="pred-fact">数学结论：下一圈圆心<b>必在</b>青色虚线圆内（面积只有当前圈的 ${Math.round(r.shrink * 100)}%）</div>
         ${r.flat
         ? `<div class="pred-flat">这一圈可行域内地形 / 物资条件接近，没有形成显著热点——按可行域整体规划即可，虚线圆内任意落点都合理。</div>`
-        : `<p class="hint">下面几块比周围更值得先看。百分比是采样里的相对高低。</p>` + r.top.map(b => `
+        : `<p class="hint">下面几块比周围更值得先看。百分比是模型内候选权重，不代表真实刷圈概率。</p>` + r.top.map(b => `
           <div class="pred-zone z${b.rank}">
             <i>${b.rank}</i>
-            <div><b>${this.placeNear(b.cx, b.cy)}</b><span>相对 ${Math.round(b.prob * 100)}% · 水 ${Math.round(b.water * 100)}%</span></div>
+            <div><b>${this.placeNear(b.cx, b.cy)}</b><span>权重 ${Math.round(b.prob * 100)}% · 水 ${Math.round(b.water * 100)}%</span></div>
           </div>`).join('')}
         ${r.hold ? `<div class="pred-hold">建议优先占位：<b>${r.hold.name}</b>（圈内物资最高，资源 ${r.hold.loot}）</div>` : ''}
         <p class="hint">${r.note}</p>
@@ -487,7 +487,7 @@ const Game = {
         ['4', '战斗攻略', '架枪/突击/探点/看屁股/自由手分工 + 载具配置 + 进圈与转移要点']]
         .map(([n, t, d]) => `<div class="flow-card"><b>${n}</b><div><span>${t}</span><p>${d}</p></div></div>`).join('')}
         </div>
-        <p class="hint">💡 游戏模式下地图情报依然可用：左侧图层可随时开关点位、载具与 16 类地形标注，点击标记即可查看 360° 地形视角。</p>
+          <p class="hint">💡 游戏模式下地图情报依然可用：左侧图层可随时开关点位、载具与 19 类地形标注，点击标记即可查看 360° 地形视角。</p>
         <div class="welcome-btns">
           <button class="primary-btn" onclick="Game.goStep(1)">开始 → 第 1 步：落地打法</button>
           <button class="ghost-btn" onclick="Game.renderPro()">📖 职业运营手册</button>
@@ -630,22 +630,29 @@ const Game = {
   /* ============================== 第 1 步 ============================== */
   renderStep1() {
     const g = App.game;
+    const summaries = {
+      urban: '近航线城区，快速接战', vehicle: '先拿载具，再转移发育',
+      wild: '低密度房群，分散搜集', flexible: '比较三种打法再选点'
+    };
     $('#inspector').innerHTML = `
       <div class="insp-head">
         <div class="insp-title">① 落地打法与航线</div>
         <div class="insp-sub">选择打法 → 画航线 → 计算推荐跳点</div>
       </div>
-      <div class="insp-body">
+      <div class="insp-body step-one-body">
         <div class="section-title">这把的打法</div>
         <div class="style-grid">
           ${LANDING_STYLES.map(s => `
             <button class="style-card${g.style === s.id ? ' active' : ''}" data-style="${s.id}">
               <span class="style-ico">${s.icon}</span>
               <b>${s.name}</b>
-              <p>${s.desc}</p>
-              <em>${s.demand}</em>
+              <p>${summaries[s.id] || s.name}</p>
             </button>`).join('')}
         </div>
+        <details class="style-help">
+          <summary>查看打法说明与操作要求</summary>
+          ${LANDING_STYLES.map(s => `<div class="style-help-item"><b>${s.icon} ${s.name}</b><p>${s.desc}</p><p class="hint">要求：${s.demand}</p></div>`).join('')}
+        </details>
         <div class="section-title">跟跳人数</div>
         <div class="seg-row" id="followRow">
           ${[0, 1, 2, 3].map(n => `<button class="seg-btn${g.followers === n ? ' active' : ''}" data-n="${n}">${n} 名队友</button>`).join('')}
@@ -656,7 +663,7 @@ const Game = {
           <button class="ghost-btn" onclick="Tools.set('pan');App.flight=null;App.routes=[];App.congestion=null;MapView.renderOverlay();Game.renderStep1()">清除</button>
         </div>
         <p class="hint">${App.flight && App.flight.end ? '✅ 航线已绘制，可以计算了' : '在地图上点击两次：起点 → 终点'}</p>
-        <button class="primary-btn" id="calcDrop" ${g.style && App.flight && App.flight.end ? '' : 'disabled'}>🎯 计算推荐跳点</button>
+        <div class="step-primary-action"><button class="primary-btn" id="calcDrop" ${g.style && App.flight && App.flight.end ? '' : 'disabled'}>🎯 计算推荐跳点</button></div>
         <div id="dropResult"></div>
         <div class="predict-sec">
           <div class="section-title">🚦 航线拥堵模拟</div>
@@ -1269,6 +1276,7 @@ const Game = {
     if (!App.circleEdit || App.circleEdit.phase !== phase) this.ensureCircle(phase, false);
     else this.paintCircleEditor();
     MapView.renderOverlay();
+    if (g.plan && g.plan.phase === phase) this.showPlan();
   },
 
   bindStep3() {
@@ -1643,7 +1651,7 @@ const Game = {
     const routes = this.genRoutes(from, cur, target, inCircle);
 
     g.plan = {
-      phase, rule, inCircle, target, routes,
+      phase, rule, inCircle, target, routes, selectedRouteIndex: 0,
       modeName: rules.name, dps: rule.dps, remain: g.remain,
       deadline: Date.now() + g.remain * 1000,
       estFrom, startLabel, from,
@@ -1697,23 +1705,20 @@ const Game = {
       .filter(x => (x.corridor < 16 && x.d < 32) || (straight > 16 && x.d < 40))
       .sort((a, b) => (a.d + a.corridor * 1.6) - (b.d + b.corridor * 1.6));
     const carStop = vs[0];
-    const p1 = carStop ? carStop.v.coords : offsetPoint(0.35, 0);
-    const fastPath = [from, p1, jitter(GeoUtil.lerp(p1, tgt, 0.5), 3, 1.0), tgt];
-    const walkT = Math.round(GeoUtil.dist(from, p1) * 80 / 5.8);
-    const driveT = Math.round(GeoUtil.dist(p1, tgt) * 80 / 19.5);
-    const fastTime = carStop ? walkT + 12 + driveT : Math.round(straight * 80 / 6.2);
+    const fastPath = carStop ? [from, carStop.v.coords, tgt] : [from, tgt];
+    const fastSegments = carStop ? [
+      Object.assign(seg(from, carStop.v.coords, '步行', `去 ${carStop.v.location} 找 ${carStop.v.type}（含 12 秒取车）`),
+        { time: Math.round(GeoUtil.dist(from, carStop.v.coords) * 80 / 5.8) + 12 }),
+      seg(carStop.v.coords, tgt, '载具', `直插 ${target.name}`)
+    ] : [seg(from, tgt, '步行', `徒步前往 ${target.name}`)];
     routes.push({
       name: '快速路线', short: '快速', color: '#ece8e1', path: fastPath,
-      time: fastTime, safety: clamp(58 + (carStop ? 6 : -8), 30, 90), loot: 45,
-      segments: [
-        Object.assign(seg(from, p1, '步行', carStop ? `去 ${carStop.v.location} 拿 ${carStop.v.type}` : '沿主路徒步'), { time: walkT + (carStop ? 12 : 0) }),
-        Object.assign(seg(p1, tgt, carStop ? '载具' : '步行', `直插 ${target.name}`), { time: driveT }),
-        { text: '到位后立刻占住房区或反坡，不要再动车', dir: '—', dist: '0m', mode: '占位', time: 8 }
-      ],
+      safety: clamp(58 + (carStop ? 6 : -8), 30, 90), loot: 45,
+      segments: fastSegments.concat([{ text: '到位后检查掩体并占位', dir: '—', dist: '0m', mode: '占位', time: 8 }]),
       notes: [
-        carStop ? `用 ${carStop.v.location} 的 ${carStop.v.type}（${carStop.k}刷新，${Fmt.m(carStop.d)}m）` : '沿途没有稳定载具点，只能步行，必须提前出发',
-        '直线路线最容易被高点收枪：过开阔地时压速度、贴着反坡走',
-        inCircle ? '当前仍在圈内，可以打完最后一波再走' : '当前已在圈外，优先赶路不要恋战'
+        carStop ? `参考 ${carStop.v.location} 的 ${carStop.v.type}（${carStop.k}刷新，${Fmt.m(carStop.d)}m）；请现场确认有车` : '附近没有合适的参考载具点，当前按步行估时',
+        '折线只表示转移思路；过河、绕山与道路情况需要自行核对',
+        inCircle ? '当前位置在输入圈内，仍需根据所选路线预留出发时间' : '当前位置在输入圈外，优先评估转移与补给'
       ]
     });
 
@@ -1733,19 +1738,18 @@ const Game = {
       else safePath.push(offsetPoint(t, side * (6 + i * 2)));
     });
     safePath.push(tgt);
-    const safeTime = Math.round(this.pathLen(safePath) * 80 / 6.2 + 20);
     routes.push({
       name: '安全路线', short: '安全', color: '#3ecf8e', path: safePath,
-      time: safeTime, safety: clamp(84 + Math.min(cover.length, 6) * 2, 60, 96), loot: 55,
+      safety: clamp(84 + Math.min(cover.length, 6) * 2, 60, 96), loot: 55,
       segments: safePath.slice(1).map((p, i) => {
         const prev = safePath[i];
         const cv = cover.find(c => GeoUtil.dist(c.t.coords, p) < 3);
         return seg(prev, p, '步行', cv ? `借 ${TERRAIN_CATS[cv.t.cat].name}（${cv.t.name}）低姿态通过` : `贴边绕行，避开 ${hot ? hot.name : '开阔地'}`);
-      }).concat([{ text: `抵达 ${target.name} 并占位`, dir: '—', dist: '0m', mode: '占位', time: 8 }]),
+      }).concat([{ text: `抵达 ${target.name}，观察 20 秒后占位`, dir: '—', dist: '0m', mode: '观察 / 占位', time: 28 }]),
       notes: [
-        hot ? `刻意绕开 ${hot.name}（密度 ${hot.density}），把高密度区留给别人打` : '全程避开高密度城区',
+        hot ? `尝试绕开 ${hot.name}（静态密度 ${hot.density}），实际路线需自行确认` : '参考走廊内未标出高密度城区，仍需观察敌情',
         cover.length ? `途经掩体：${cover.slice(0, 4).map(c => TERRAIN_CATS[c.t.cat].name).join(' / ')}，可随时停下观察` : '沿途掩体较少，注意保持低姿态',
-        '时间更长但胜率更高：适合圈外伤害低、还有富裕时间的阶段'
+        '以掩体与绕行为优先的示意思路，参考分不代表真实安全程度或胜率'
       ]
     });
 
@@ -1755,20 +1759,19 @@ const Game = {
       .filter(x => x.proj > 0.12 && x.proj < 0.9)
       .sort((a, b) => b.p.loot - a.p.loot).slice(0, 2)
       .sort((a, b) => a.proj - b.proj);
-    const lootPath = [from, ...lootStops.map(x => jitter(x.p.coords, x.proj * 50, 0.5)), tgt];
-    const lootTime = Math.round(this.pathLen(lootPath) * 80 / 6.6 + lootStops.length * 45 + 15);
+    const lootPath = [from, ...lootStops.map(x => x.p.coords), tgt];
+    const lootSegments = lootPath.slice(1).map((p, i) => {
+      const stop = lootStops[i];
+      const step = seg(lootPath[i], p, '步行', stop
+        ? `转进 ${stop.p.name} 搜刮（含 45 秒搜索；资源 ${stop.p.loot} / 密度 ${stop.p.density}）`
+        : `前往 ${target.name}`);
+      if (stop) step.time += 45;
+      return step;
+    });
     routes.push({
       name: '资源路线', short: '资源', color: '#f5a524', path: lootPath,
-      time: lootTime, safety: clamp(66 - lootStops.length * 4, 35, 85), loot: clamp(70 + lootStops.length * 12, 40, 98),
-      segments: [
-        ...(lootStops.length
-          ? lootStops.map((x, i) => {
-            const prev = i === 0 ? from : lootStops[i - 1].p.coords;
-            return Object.assign(seg(prev, x.p.coords, '步行', `转进 ${x.p.name} 搜刮（资源 ${x.p.loot} / 密度 ${x.p.density}）`), { time: Math.round(GeoUtil.dist(prev, x.p.coords) * 80 / 5.8) + 45 });
-          })
-          : [seg(from, lootPath[1] || tgt, '步行', '沿途野区房快速搜索')]),
-        Object.assign(seg(lootPath[lootPath.length - 2] || from, tgt, '步行', `补齐后直插 ${target.name}`), {})
-      ],
+      safety: clamp(66 - lootStops.length * 4, 35, 85), loot: clamp(70 + lootStops.length * 12, 40, 98),
+      segments: lootSegments.concat([{ text: '抵达后检查掩体并占位', dir: '—', dist: '0m', mode: '占位', time: 8 }]),
       notes: [
         lootStops.length ? `途经资源点：${lootStops.map(x => `${x.p.name}（${x.p.loot}）`).join('、')}` : '沿途资源点不多，收益有限',
         '每处停留不超过 45 秒，搜到枪/甲/药就走',
@@ -1776,6 +1779,8 @@ const Game = {
       ]
     });
 
+    // 总时长始终来自界面列出的分段，包含取车、搜索、观察和占位。
+    routes.forEach(route => { route.time = route.segments.reduce((sum, step) => sum + step.time, 0); });
     return routes;
   },
 
@@ -1790,26 +1795,40 @@ const Game = {
     return s;
   },
 
+  selectedRoute(plan = App.game.plan) {
+    if (!plan || !plan.routes || !plan.routes.length) return null;
+    const index = Number.isInteger(plan.selectedRouteIndex) && plan.selectedRouteIndex >= 0
+      && plan.selectedRouteIndex < plan.routes.length ? plan.selectedRouteIndex : 0;
+    return plan.routes[index];
+  },
+
+  departureAdvice(plan, remain) {
+    const route = this.selectedRoute(plan);
+    if (!route) return '请先生成示意路线。';
+    const buffer = 12;
+    const leaveIn = remain - route.time - buffer;
+    if (remain === 0) return `按已选的${route.name}，进圈估计需要 <b>${Fmt.zhDur(route.time)}</b>。这是计划圈，不会自动缩小。`;
+    if (leaveIn > 25) return `按${route.name}，<b class="ok">建议 ${Fmt.mmss(leaveIn)} 后出发</b>，已预留 ${buffer} 秒额外缓冲。地形与敌情可能增加耗时。`;
+    if (leaveIn > 0) return `<b class="warn">${Fmt.mmss(leaveIn)} 后应出发</b>：${route.name}估计需要 ${Fmt.mmss(route.time)}，已预留 ${buffer} 秒额外缓冲。`;
+    return `<b class="danger">建议立刻出发</b>：按${route.name}已比参考出发时间晚 ${Fmt.mmss(-leaveIn)}。参考圈外伤害 ${plan.dps}/s，转移时留意补给。`;
+  },
+
   showPlan() {
     const g = App.game, plan = g.plan;
     if (!plan) return;
     const box = $('#planResult');
     if (!box) return;
-    const travelBest = Math.min(...plan.routes.map(r => r.time));
-    const buffer = 12;
-    const leaveIn = plan.remain - travelBest - buffer;
-    const advice = plan.remain === 0
-      ? `按最快这条路线，进圈大约需要 <b>${Fmt.zhDur(travelBest)}</b>。这是计划圈，不会自动缩小。`
-      : leaveIn > 25
-      ? `<b class="ok">还能再等 ${Fmt.mmss(leaveIn)}</b> 再出发：先用这段时间搜完当前房区 / 卡一波过路人。`
-      : leaveIn > 0
-        ? `<b class="warn">${Fmt.mmss(leaveIn)} 后必须出发</b>：最快路线需要 ${Fmt.mmss(travelBest)}，已预留 ${buffer}s 找车与意外缓冲。`
-        : `<b class="danger">已经晚了 ${Fmt.mmss(-leaveIn)}，立刻出发！</b>圈外伤害 ${plan.dps}/s，拖 10 秒就掉 ${Math.round(plan.dps * 10)} 血。`;
+    const selected = this.selectedRoute(plan);
+    if (!selected) return;
+    plan.selectedRouteIndex = plan.routes.indexOf(selected);
+    const remain = Number.isFinite(plan.deadline)
+      ? Math.max(0, Math.round((plan.deadline - Date.now()) / 1000)) : plan.remain;
+    const advice = this.departureAdvice(plan, remain);
 
     box.innerHTML = `
       <div class="plan-head ${plan.inCircle ? 'in' : 'out'}">
         <div class="plan-state">${plan.inCircle ? '✅ 当前位置在圈内' : '⚠️ 当前位置在圈外'}</div>
-        <div class="plan-meta">${plan.modeName} · 第 ${plan.phase} 圈（半径约 ${plan.radiusM}m）· 距开始缩圈 <b id="planClock">${Fmt.mmss(plan.remain)}</b></div>
+        <div class="plan-meta">${plan.modeName} · 第 ${plan.phase} 圈（半径约 ${plan.radiusM}m）· 距开始缩圈 <b id="planClock">${Fmt.mmss(remain)}</b></div>
       </div>
       <div class="start-box">
         <span>起点：<b>${plan.startLabel}</b></span>
@@ -1818,7 +1837,7 @@ const Game = {
       </div>
       <div class="note-box advice">
         <div class="note-title">⏱ 何时进圈</div>
-        <p>${advice}</p>
+        <p id="planAdvice">${advice}</p>
         <p class="dim">本圈规则：等待 ${Fmt.mmss(plan.rule.wait)} → 缩圈 ${Fmt.mmss(plan.rule.shrink)} → 圈外 ${plan.rule.dps}/s；
           下一圈半径约 ${Math.round(plan.target.radius * 80)}m。</p>
       </div>
@@ -1827,19 +1846,20 @@ const Game = {
         预估中心 ${CirclePredictor.placeNear(plan.target.coords[0], plan.target.coords[1])} · 半径约 ${Math.round(plan.target.radius * 80)} 米
         <button class="ghost-btn mini" onclick="MapView.focus(App.game.plan.target.coords,2.6)">📍 定位</button></p>
 
-      <div class="section-title">🛣 行进路线（点选查看，地图上会高亮并标出每一步）</div>
+      <div class="section-title">🛣 示意路线（点选后同步出发提醒）</div>
+      <p class="hint route-disclaimer">路线连接参考点位，未校验道路、河流、山体和敌人位置。时间按步行 5.8m/s、载具 19.5m/s 估算，需结合实际地形调整；安全与资源为模型参考分。</p>
       ${plan.routes.map((r, i) => `
-        <div class="route-card${i === 0 ? ' active' : ''}" data-i="${i}" style="--c:${r.color}">
+        <div class="route-card${i === plan.selectedRouteIndex ? ' active' : ''}" data-i="${i}" style="--c:${r.color}">
           <div class="route-top">
             <b>${r.name}</b>
             <span class="route-time">⏱ ${Fmt.mmss(r.time)}</span>
             <span class="route-tag">${Fmt.m(this.pathLen(r.path))}m</span>
           </div>
           <div class="rec-bars">
-            ${[['安全度', r.safety, '#3ecf8e'], ['资源收益', r.loot, '#f5a524']]
+            ${[['安全参考分', r.safety, '#3ecf8e'], ['资源参考分', r.loot, '#f5a524']]
         .map(([n, v, c]) => `<div class="mini-meter"><span>${n}</span><i><b style="width:${v}%;background:${c}"></b></i><em>${v}</em></div>`).join('')}
           </div>
-          <div class="seg-title">怎么走（第 1 步 → 第 ${r.segments.length} 步，地图上对应 ① ② ③ 标记）</div>
+          <div class="seg-title">分段估时（共 ${r.segments.length} 步；地图数字标出沿途节点）</div>
           <ol class="seg-list">
             ${r.segments.map((s, si) => `
               <li>
@@ -1858,12 +1878,12 @@ const Game = {
     $$('#planResult .route-card').forEach(c => c.onclick = (e) => {
       if (e.target.tagName === 'BUTTON') return;
       const i = +c.dataset.i;
-      $$('#planResult .route-card').forEach(x => x.classList.remove('active'));
-      c.classList.add('active');
-      App.routes.forEach((r, ri) => r.visible = ri === i);
-      MapView.renderOverlay();
+      plan.selectedRouteIndex = i;
+      this.showPlan();
+      GameHUD.render();
     });
-    App.routes.forEach((r, i) => r.visible = i === 0);
+    App.routes = plan.routes;
+    App.routes.forEach((r, i) => r.visible = i === plan.selectedRouteIndex);
     MapView.renderOverlay();
   },
 
@@ -1880,6 +1900,7 @@ const Game = {
     const nearTer = (m.terrains || []).map(t => ({ t, d: GeoUtil.dist(t.coords, p) }))
       .filter(x => x.d <= 12).sort((a, b) => a.d - b.d).slice(0, 6);
     const vehRec = this.recommendVehicles(p, g);
+    const route = this.selectedRoute();
 
     $('#inspector').innerHTML = `
       <div class="insp-head">
@@ -1888,6 +1909,7 @@ const Game = {
         <div class="insp-sub">${m.name} · ${g.compSize} 人编制</div>
       </div>
       <div class="insp-body">
+        ${route ? `<div class="note-box"><div class="note-title">当前转移方案</div><p>${route.name} · 估计 ${Fmt.zhDur(route.time)}（示意）</p><p class="hint">地图与缩圈提醒继续使用这条路线；可返回第 3 步切换。</p></div>` : ''}
         <button class="tool-btn wide" onclick="MapView.focus(App.game.chosen.coords,2.6)">📍 在地图上定位落点</button>
         <div class="section-title">🎭 分工（四人队标准站位）</div>
         <div class="role-grid">
@@ -1924,7 +1946,10 @@ const Game = {
       </div>`;
 
     $$('#inspector .mini-card').forEach(c => c.onclick = () => Inspector.terrain(m.terrains.find(t => t.id === c.dataset.ter)));
-    App.routes = [];
+    if (g.plan) {
+      App.routes = g.plan.routes;
+      App.routes.forEach(r => r.visible = r === route);
+    }
     MapView.renderOverlay();
   },
 
@@ -2090,7 +2115,7 @@ const PlanCard = {
         x.setLineDash([]);
         if (z.rank === 1) {
           x.fillStyle = SEAL; x.font = '700 22px ' + SERIF;
-          x.fillText('候选区一 · ' + Math.round(z.prob * 100) + '%', pp[0] - 60, pp[1] - App.prediction.rNext / 100 * dw - 10);
+          x.fillText('候选区一 · 权重 ' + Math.round(z.prob * 100) + '%', pp[0] - 60, pp[1] - App.prediction.rNext / 100 * dw - 10);
         }
       });
     }
@@ -2118,11 +2143,11 @@ const PlanCard = {
     const numCN = ['零', '一', '二', '三', '四', '五', '六', '七', '八'];
     note('打法', styleName);
     note('落点', g.chosen ? g.chosen.name : (App.pin ? '自择之点' : '未定'));
-    note('圈形', cphases.length ? '已定' + numCN[cphases.length] + '圈，末圈径' + Math.round((App.circles[lastPh].r * 80) / 100) + '里' : '未定');
+    note('圈形', cphases.length ? '已定' + numCN[cphases.length] + '圈，末圈半径约' + Math.round(App.circles[lastPh].r * 80) + '米' : '未定');
     if (App.prediction && !App.prediction.error && App.prediction.hold) {
-      note('推演', '候选区一，概率 ' + Math.round((App.prediction.top[0].prob || 0) * 100) + '%，宜先占' + App.prediction.hold.name);
+      note('推演', '候选权重 ' + Math.round((App.prediction.top[0].prob || 0) * 100) + '%，参考占位：' + App.prediction.hold.name);
     }
-    note('兵法', '听声辨路，择静而行');
+    note('说明', '启发式推演，未经实际命中率校准');
 
     // 底部：日期 + 朱印（旋转）
     x.fillStyle = INK2; x.font = '400 19px ' + SERIF;
@@ -2182,6 +2207,7 @@ const GameSidebar = {
       </div>
       <div class="side-sec">
         <div class="side-title">🗂 情报图层</div>
+        ${LayerPresets.html()}
         ${[['pois', '主要点位'], ['density', '人口密度热区'], ['vehFixed', '固定载具点'], ['vehPeriodic', '定期载具点'], ['vehSpecial', '特殊载具点'], ['fav', '★ 我的收藏']]
         .map(([k, n]) => `<label class="layer-row"><input type="checkbox" data-layer="${k}" ${App.layers[k] ? 'checked' : ''}><span>${n}</span></label>`).join('')}
         <label class="layer-row"><input type="checkbox" data-terall ${Object.values(App.layers.terrain).every(Boolean) ? 'checked' : ''}><span>全部地形标注</span></label>
@@ -2196,12 +2222,15 @@ const GameSidebar = {
         <button class="side-link pb-entry" onclick="Game.renderReplays()">📋 对局复盘</button>
         <button class="side-link pb-entry" onclick="ShareLink.copy()">📤 复制分享链接</button>
         <button class="side-link pb-entry" onclick="PlanCard.export()">📜 沙盘志方案卡</button>
+        ${Pins.unassigned().length ? `<button class="side-link" onclick="Inspector.legacyPins()">★ 待归类收藏 · ${Pins.unassigned().length}</button>` : ''}
       </div>`;
     $$('#sidebar [data-step]').forEach(b => b.onclick = () => Game.goStep(+b.dataset.step));
-    $$('#sidebar [data-layer]').forEach(i => i.onchange = () => { App.layers[i.dataset.layer] = i.checked; MapView.renderAll(); });
+    LayerPresets.bind();
+    $$('#sidebar [data-layer]').forEach(i => i.onchange = () => { App.layers[i.dataset.layer] = i.checked; LayerPresets.sync(); MapView.renderAll(); });
     const all = $('#sidebar [data-terall]');
     if (all) all.onchange = () => {
       Object.keys(TERRAIN_CATS).forEach(k => App.layers.terrain[k] = all.checked);
+      LayerPresets.sync();
       MapView.renderAll();
     };
     $('#exitGame').onclick = () => exitGameMode();
@@ -2263,7 +2292,9 @@ const GameHUD = {
     if (!hud || !g.plan) return;
     const plan = g.plan;
     const left = Math.max(0, Math.round((plan.deadline - Date.now()) / 1000));
-    const travel = Math.min(...plan.routes.map(r => r.time));
+    const route = Game.selectedRoute(plan);
+    if (!route) return;
+    const travel = route.time;
     const go = left - travel - 12;
     const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
     const dot = document.getElementById('hudDot');
@@ -2271,13 +2302,16 @@ const GameHUD = {
     set('hudMode', plan.modeName);
     set('hudPhase', ` · 第 ${plan.phase} 圈 · 圈外 ${plan.dps}/s`);
     set('hudClock', left === 0 ? '计划圈，不会自动缩小' : '距缩圈 ' + Fmt.mmss(left));
+    set('planClock', Fmt.mmss(left));
+    const planAdvice = document.getElementById('planAdvice');
+    if (planAdvice) planAdvice.innerHTML = Game.departureAdvice(plan, left);
     const clk = document.getElementById('hudClock');
     if (clk) clk.className = 'hud-clock' + (left === 0 ? ' zero' : '');
     const adv = document.getElementById('hudAdvice');
     if (adv) {
       if (left === 0) {
         adv.className = 'hud-advice ok';
-        adv.textContent = '按这条路线，进圈大约需要 ' + Fmt.zhDur(travel);
+        adv.textContent = '按' + route.name + '，进圈估计需要 ' + Fmt.zhDur(travel);
       } else {
         adv.className = 'hud-advice ' + (go <= 0 ? 'danger' : go < 25 ? 'warn' : 'ok');
         adv.textContent = go <= 0 ? `⚠️ 立刻出发（晚了 ${Fmt.mmss(-go)}）` : `建议 ${Fmt.mmss(go)} 后出发`;
@@ -2286,7 +2320,7 @@ const GameHUD = {
     const fromName = CirclePredictor.placeNear(plan.from[0], plan.from[1]);
     const toName = CirclePredictor.placeNear(plan.target.coords[0], plan.target.coords[1]);
     const apart = Fmt.m(GeoUtil.dist(plan.from, plan.target.coords));
-    set('hudSub', `从 ${fromName} 到 ${toName}，相距 ${apart} 米 · 最快 ${Fmt.mmss(travel)}`);
+    set('hudSub', `从 ${fromName} 到 ${toName}，相距 ${apart} 米 · ${route.name} ${Fmt.mmss(travel)}（估计）`);
     if (left === 0) { clearInterval(this._t); this._t = null; }
   },
 

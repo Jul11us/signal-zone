@@ -7,6 +7,8 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'app-core.js'), 'utf8');
+const dataSource = fs.readFileSync(path.join(__dirname, '..', 'data-v4.js'), 'utf8');
+const gameSource = fs.readFileSync(path.join(__dirname, '..', 'app-game.js'), 'utf8');
 
 function harness() {
   const created = [];
@@ -15,7 +17,7 @@ function harness() {
     const node = {
       tag, innerHTML: '', textContent: '', dataset: {}, children: [],
       style: { setProperty() {} },
-      classList: { contains: () => false },
+      classList: { contains: () => false, add() {}, remove() {}, toggle() {} },
       setAttribute(name, value) { this[name] = String(value); },
       appendChild(child) { this.children.push(child); return child; },
       querySelectorAll: () => [],
@@ -35,10 +37,9 @@ function harness() {
     querySelectorAll: () => []
   };
   const storage = new Map();
-  const map = name => ({ name, pois: [], terrains: [] });
+  const calls = { modes: [], steps: [] };
   const context = vm.createContext({
-    document, window: {},
-    MAP_DATA: { island: map('海岛'), desert: map('沙漠'), rongdu: map('荣都') },
+    document, window: {}, calls,
     location: { origin: 'https://example.com', pathname: '/signal-zone/', search: '', hash: '' },
     history: { replaceState() {} },
     localStorage: {
@@ -50,22 +51,29 @@ function harness() {
     escape, unescape,
     setTimeout: () => 0, clearTimeout() {}
   });
+  vm.runInContext(dataSource, context, { filename: 'data-v4.js' });
   vm.runInContext(source, context, { filename: 'app-core.js' });
+  vm.runInContext(gameSource, context, { filename: 'app-game.js' });
   // Keep the real share parser and renderers; replace only the unrelated map UI lifecycle.
   vm.runInContext(`
-    setMap = id => { App.mapId = id; App.flight = null; App.circles = {}; App.pin = null; };
+    setMap = id => { App.mapId = id; App.flight = null; App.circles = {}; App.pin = null; Game.reset(); };
+    setMode = mode => { App.mode = mode; calls.modes.push(mode); };
+    Game.goStep = step => { calls.steps.push(step); };
+    Game.onFlightReady = () => {};
+    GameHUD.render = () => {};
+    GameSidebar.render = () => {};
     MapView.layer = document.createElement('markers');
     MapView.svg = document.createElement('svg');
     MapView.stage = { clientWidth: 1000, clientHeight: 1000 };
     MapView.baseW = MapView.baseH = 1000;
-    globalThis.subject = { App, ShareLink, MapView, Inspector };
+    globalThis.subject = { App, ShareLink, MapView, Inspector, Pins, Game, MAP_DATA, LANDING_STYLES };
   `, context);
   const restore = payload => {
     const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
     context.location.hash = '#z=' + Buffer.from(json, 'utf8').toString('base64');
     return context.subject.ShareLink.restore();
   };
-  return { ...context.subject, context, document, created, restore };
+  return { ...context.subject, context, document, created, restore, calls };
 }
 
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -140,7 +148,7 @@ test('circle phases and radii reject invalid values while retaining valid legacy
 test('favorite names and notes are text in marker and editor HTML sinks', () => {
   const h = harness();
   const favorite = {
-    id: 'pin_test', coords: [50, 50],
+    id: 'pin_test', mapId: 'island', coords: [50, 50],
     name: '<img src=x onerror="ATTACK"> & \' "',
     note: '</textarea><svg onload="ATTACK">'
   };
@@ -156,4 +164,72 @@ test('favorite names and notes are text in marker and editor HTML sinks', () => 
   assert.match(editor, /&lt;\/textarea&gt;&lt;svg onload=&quot;ATTACK&quot;&gt;/);
   assert.equal((editor.match(/<\/textarea>/g) || []).length, 1);
   assert.deepEqual(plain(h.App.custom[0]), favorite);
+});
+
+test('a legacy shared pin restores a usable landing selection and opens circle planning', () => {
+  const h = harness();
+  assert.equal(h.restore({ v: 1, map: 'rongdu', pin: [32, 45], circles: { 1: { cx: 50, cy: 50, r: 25 } } }), true);
+  assert.deepEqual(plain(h.App.game.chosen.coords), [32, 45]);
+  assert.equal(h.App.mode, 'game');
+  assert.deepEqual(h.calls.steps, [3]);
+  h.Game.showPlan = () => {};
+  h.Game.genPlan();
+  assert.ok(h.App.game.plan, 'the recovered selection can generate an actual route plan without selecting it again');
+  assert.deepEqual(plain(h.App.game.plan.from), [32, 45]);
+});
+
+test('version two links round-trip editable planning inputs and canonical POI identity', () => {
+  const h = harness();
+  const poi = h.MAP_DATA.rongdu.pois[0];
+  h.App.mapId = 'rongdu';
+  h.App.pin = { coords: plain(poi.coords) };
+  h.App.flight = { start: [5, 15], end: [85, 95] };
+  h.App.circles = { 2: { cx: 50, cy: 50, r: 15 } };
+  const expected = {
+    style: h.LANDING_STYLES[0].id, followers: 2, planPhase: 2, phase: 2,
+    phasePos: { 1: [40, 45] }, circleMode: 'peak', remain: 75,
+    players: 43, teams: 12, compSize: 3
+  };
+  Object.assign(h.App.game, expected, { chosen: { name: poi.name, coords: plain(poi.coords), type: poi.type } });
+  const url = h.ShareLink.encode();
+  const payload = JSON.parse(Buffer.from(new URL(url).hash.slice(3), 'base64').toString('utf8'));
+  assert.equal(payload.v, 2);
+  assert.deepEqual(payload.game.chosen, plain(poi.coords));
+  h.context.location.hash = new URL(url).hash;
+  assert.equal(h.ShareLink.restore(), true);
+  for (const [key, value] of Object.entries(expected)) assert.deepEqual(plain(h.App.game[key]), value, key);
+  assert.equal(h.App.game.chosen.name, poi.name);
+  assert.deepEqual(plain(h.App.game.chosen.coords), plain(poi.coords));
+  assert.equal(h.App.mode, 'game');
+  assert.deepEqual(h.calls.steps, [3]);
+});
+
+test('shared landing names are derived from local data and never from untrusted link labels', () => {
+  const h = harness();
+  assert.equal(h.restore({ v: 2, map: 'island', game: { chosen: [32.1, 45.1], name: '<svg onload="ATTACK">' } }), true);
+  assert.equal(h.App.game.chosen.name, '分享落点');
+  assert.doesNotMatch(JSON.stringify(h.App.game.chosen), /ATTACK|<svg/);
+  assert.deepEqual(h.calls.steps, [2]);
+});
+
+test('invalid version two planning fields do not become game state', () => {
+  const h = harness();
+  assert.equal(h.restore({ v: 2, map: 'island', game: {
+    chosen: [20, '30'], style: '<img onerror="ATTACK">', followers: 4,
+    planPhase: 9, phase: 0, phasePos: { 0: [30, 40], 1: [30, 40], 2: [30, '40'], 9: [30, 40] },
+    circleMode: 'constructor', remain: -20, players: 1000, teams: '16', compSize: 5
+  } }), true);
+  const g = h.App.game;
+  assert.equal(g.chosen, null);
+  assert.equal(g.style, null);
+  assert.ok(Number.isInteger(g.followers) && g.followers >= 0 && g.followers <= 3);
+  assert.ok(Number.isInteger(g.planPhase) && g.planPhase >= 1 && g.planPhase <= 8);
+  assert.ok(Number.isInteger(g.phase) && g.phase >= 1 && g.phase <= 8);
+  assert.deepEqual(plain(g.phasePos), { 1: [30, 40] });
+  assert.equal(g.circleMode, 'ranked');
+  assert.ok(g.remain === null || (Number.isFinite(g.remain) && g.remain >= 0 && g.remain <= 7200));
+  assert.ok(Number.isInteger(g.players) && g.players >= 1 && g.players <= 100);
+  assert.ok(Number.isInteger(g.teams) && g.teams >= 1 && g.teams <= 100);
+  assert.ok(Number.isInteger(g.compSize) && g.compSize >= 1 && g.compSize <= 4);
+  assert.doesNotMatch(JSON.stringify(g), /ATTACK/);
 });
