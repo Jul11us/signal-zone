@@ -134,3 +134,9 @@ This is an unofficial fan project, with no affiliation with or endorsement by Ga
 <sub><strong>SIGNAL//ZONE</strong> · MAP INTELLIGENCE / DROP PLANNING / ZONE SCENARIOS</sub><br />
 <sub>Read the map. Plan the next move.</sub>
 </div>
+
+### Terrain explorer and survey tools
+
+Open **立体地形** in the map toolbar for an independent 2D/3D terrain workspace. Erangel includes an 8K satellite map, an illustrated map and elevation colors; Miramar includes elevation colors. Drag to orbit, scroll to zoom and adjust terrain exaggeration. WebGL falls back to 2D when unavailable. Terrain assets load on demand; 3D uses 2K textures and compact height fields.
+
+The planning map also supports multi-segment straight-line distance estimates, undo/clear, a 1 km reference grid and percentage coordinates. Distances retain the existing 8 km map-width assumption. Terrain uses older PUBG PC resources (2019 heights, 2021 satellite imagery), with relative rather than calibrated elevations. It remains separate from planning coordinates to avoid shifting existing markers. See [terrain sources and regeneration](docs/TERRAIN.md).

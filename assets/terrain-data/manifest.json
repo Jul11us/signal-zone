@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "gridSize": 193,
+  "maps": {
+    "erangel": {
+      "sourceSize": [
+        8192,
+        8192
+      ],
+      "sourceRange": [
+        22331.0,
+        65535.0
+      ],
+      "height": "erangel-height.bin",
+      "relief": "erangel-relief.webp",
+      "heightUnits": "relative",
+      "sourceYear": 2019
+    },
+    "miramar": {
+      "sourceSize": [
+        8192,
+        8192
+      ],
+      "sourceRange": [
+        21198.0,
+        65535.0
+      ],
+      "height": "miramar-height.bin",
+      "relief": "miramar-relief.webp",
+      "heightUnits": "relative",
+      "sourceYear": 2019
+    }
+  }
+}
