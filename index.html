@@ -14,6 +14,7 @@
     href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;0,800;1,700;1,800&family=Noto+Sans+SC:wght@400;500;700;900&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="styles-v4.css?v=30" />
+  <link rel="stylesheet" href="terrain.css?v=2" />
 </head>
 
 <body>
@@ -103,6 +104,9 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v13M1.5 8h13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M5.8 3.7 8 1.5l2.2 2.2M5.8 12.3 8 14.5l2.2-2.2M3.7 5.8 1.5 8l2.2 2.2M12.3 5.8 14.5 8l-2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           拖动
         </button>
+        <button class="tool-btn" data-tool="measure" title="逐点点击测量直线累计距离">↗ 测距</button>
+        <button class="tool-btn" id="toggleGrid" aria-pressed="false" title="显示 1 km 参考网格">▦ 网格</button>
+        <button class="tool-btn terrain-launch" id="openTerrain" title="打开 8K 贴图与立体地形查看器">⛰ 立体地形</button>
         <span class="tb-sep"></span>
         <button class="tool-btn icon-only" id="zoomOut" title="缩小（快捷键 -）">
           <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.8 10.8 14.5 14.5M4.8 7h4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -124,10 +128,18 @@
           <div class="map-tint" aria-hidden="true"></div>
           <svg class="overlay-svg" id="overlaySvg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
           <div class="marker-layer" id="markerLayer"></div>
+          <svg class="survey-svg" id="surveySvg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
           <svg class="edit-svg" id="editSvg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
         </div>
 
         <div class="map-hud-title" id="hudMapName">海岛 · Erangel</div>
+        <div class="map-coordinates" id="mapCoordinates">移入地图查看坐标</div>
+        <div class="measure-readout" id="measureReadout" hidden>
+          <strong id="measureTotal" aria-live="polite">点击地图开始测距</strong>
+          <span id="measureMeta">逐点连线 · 按 8 km 地图估算</span>
+          <button id="undoMeasure" type="button">撤销一点</button>
+          <button id="clearMeasure" type="button">清空测距</button>
+        </div>
         <div class="game-hud" id="gameHud"></div>
         <button class="hud-restore" id="hudRestore" onclick="GameHUD.show()">⏱ 显示缩圈提示</button>
         <div class="map-scale" id="mapScale">
@@ -158,13 +170,48 @@
     <aside class="inspector" id="inspector"></aside>
   </div>
 
+
+  <dialog id="terrainDialog" class="terrain-dialog" aria-labelledby="terrainTitle">
+    <div class="terrain-shell">
+      <header class="terrain-top">
+        <div class="terrain-title">
+          <span class="terrain-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m2 19 7-12 4 6 3-4 6 10H2Z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></span>
+          <div><h2 id="terrainTitle">地形观察室</h2><small>SIGNAL//ZONE · TERRAIN EXPLORER</small></div>
+        </div>
+        <div class="terrain-mode" role="group" aria-label="地形视图">
+          <button data-terrain-mode="2d" aria-pressed="false">2D 平面</button>
+          <button data-terrain-mode="3d" class="active" aria-pressed="true">3D 地形</button>
+        </div>
+        <button id="closeTerrain" class="terrain-close" aria-label="关闭地形观察室">×</button>
+      </header>
+      <div class="terrain-controls">
+        <label>地图 <select id="terrainMap"><option value="erangel">海岛 · Erangel</option><option value="miramar">沙漠 · Miramar</option></select></label>
+        <label>底图 <select id="terrainSurface"><option value="satellite">8K 卫星</option></select></label>
+        <label id="terrainHeightControl">起伏增强 <input id="terrainHeight" type="range" min="0.5" max="3" step="0.1" value="1" aria-label="地形起伏增强倍数"><output id="terrainHeightValue" for="terrainHeight">1.0×</output></label>
+        <button id="terrainReset" class="terrain-reset">↺ 重置视角</button>
+      </div>
+      <div class="terrain-stage" id="terrainStage" data-mode="3d" data-loading="true">
+        <canvas id="terrainCanvas" class="terrain-canvas" tabindex="0" aria-label="三维地形。拖动旋转，滚轮缩放，方向键旋转，0 重置。"></canvas>
+        <img id="terrainImage" class="terrain-image" alt="地形资源地图" draggable="false">
+        <div class="terrain-stamp" aria-hidden="true"><b id="terrainMapName">ERANGEL</b><span>READ THE TERRAIN. PLAN THE NEXT MOVE.</span></div>
+        <div class="terrain-compass" id="terrainOrientation" aria-hidden="true">N</div>
+        <div class="terrain-legend" id="terrainLegend" hidden>相对高程<i></i><span><span>低</span><span>高</span></span></div>
+        <div class="terrain-zoom"><button id="terrainZoomIn" aria-label="放大地形">+</button><span id="terrainZoomLabel">100%</span><button id="terrainZoomOut" aria-label="缩小地形">−</button></div>
+        <div class="terrain-status" id="terrainStatus" role="status"><span id="terrainStatusText">正在加载本地地形…</span><button id="terrainRetry" hidden>重试加载</button></div>
+      </div>
+      <footer class="terrain-footer"><b id="terrainHint">拖动旋转 · 滚轮缩放 · 方向键调整视角</b><span id="terrainSourceNote"></span></footer>
+    </div>
+  </dialog>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <!-- ============================ 脚本 ============================ -->
   <script src="data-v4.js?v=30"></script>
   <script src="pano.js?v=21"></script>
-  <script src="app-core.js?v=30"></script>
+  <script src="app-core.js?v=31"></script>
   <script src="app-game.js?v=30"></script>
+  <script src="map-survey.js?v=1"></script>
+  <script src="terrain-viewer.js?v=2"></script>
   <script>
     // 地图底图：每次换图淡入（含缓存场景）
     (function () {

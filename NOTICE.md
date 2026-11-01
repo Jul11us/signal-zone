@@ -13,3 +13,13 @@ SIGNAL//ZONE is an unofficial fan-made planning tool. It is not affiliated with 
 The three map images under `assets/`, along with game names, trademarks, and other game content, belong to their respective rights holders. This repository does not claim original ownership of those materials or grant permission for their redistribution or commercial use. Upstream license documents for the map images are not bundled.
 
 Application screenshots and plan-card previews may also contain those map assets. Any treatment of project code or presentation artwork must not be understood as a license to third-party game content. An open-source software license has not been specified for this repository.
+
+## 新增地形资源
+
+`assets/terrain-data/` 中的高度网格、设色图与 WebP 贴图由用户提供的下列资源转换：
+
+- `pubg-maps-5.7.6`：海岛及沙漠的 8192 × 8192、16 位高度图，2019 年资源；上游项目为 [cgcostume/pubg-maps](https://github.com/cgcostume/pubg-maps)。
+- `erangel-pubg`：`erangel_8k.png` 海岛贴图，随附文件日期为 2021 年。
+- `map-pubg-erangel`：`yainuc8nla2z.jpeg` 地貌贴图，随附文件日期为 2019 年；转换保留原图中的署名。
+
+上述素材仍归各自权利人所有。本项目不主张其原创版权，亦不扩大原素材的授权。用户提供的两个 FBX 模型未包含进网站；三维网格直接从提供的高度图生成。参考网站 [PUBGMAPS](https://pubgmaps.gg/zh/map/erangel) 仅用于交互设计研究，未抓取其代码或点位数据。

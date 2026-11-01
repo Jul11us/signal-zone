@@ -20,3 +20,7 @@ Thumbs.db
 Desktop.ini
 *.pem
 *.key
+
+# Local version backups and PR packaging
+.version-backups/
+.local-preview/

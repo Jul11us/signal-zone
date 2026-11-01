@@ -234,12 +234,12 @@ const MapView = {
     this.stage.addEventListener('wheel', (e) => {
       e.preventDefault();
       const r = this.stage.getBoundingClientRect();
-      const mx = (e.clientX - r.left - r.width / 2) / App.zoom;
-      const my = (e.clientY - r.top - r.height / 2) / App.zoom;
+      const mx = e.clientX - r.left - r.width / 2;
+      const my = e.clientY - r.top - r.height / 2;
       const next = clamp(App.zoom * (e.deltaY > 0 ? 0.9 : 1.1), 1, 6);
       const k = next / App.zoom;
-      App.pan.x -= mx * (k - 1);
-      App.pan.y -= my * (k - 1);
+      App.pan.x = mx - (mx - App.pan.x) * k;
+      App.pan.y = my - (my - App.pan.y) * k;
       App.zoom = next;
       this.clampPan();
       this.updateTransform();
@@ -259,7 +259,7 @@ const MapView = {
         Game.beginCircleDrag(hit, e);
         return;
       }
-      if (App.mode === 'game' && App.tool && App.tool !== 'pan') return;
+      if (App.tool && App.tool !== 'pan') return;
       App.dragging = true;
       App.dragStart = { x: e.clientX - App.pan.x, y: e.clientY - App.pan.y };
       App.dragPt = { x: e.clientX, y: e.clientY };
@@ -292,7 +292,7 @@ const MapView = {
       e.preventDefault();
       if (this.circleHit(e)) return;
       if (e.target.closest('.mk, .map-legend, .game-hud, .map-hud-title, .hud-restore, #mapToolbar, #mapScale, .map-hud, button, input, select, label')) return;
-      if (App.mode === 'game' && App.tool && App.tool !== 'pan') return;
+      if (App.tool && App.tool !== 'pan') return;
       const p = this.toPercent(e.clientX, e.clientY);
       const pin = Pins.add(p[0], p[1]);
       this.renderMarkers();
@@ -305,6 +305,10 @@ const MapView = {
       if (isUI(e)) return;
       if (App.dragged) { App.dragged = false; return; }
       if (this.circleHit(e)) return;
+      if (App.tool === 'measure') {
+        const r = this.viewport.getBoundingClientRect();
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+      }
       const p = this.toPercent(e.clientX, e.clientY);
       Tools.handleClick(p);
     });
@@ -376,6 +380,8 @@ const MapView = {
     if (es) es.style.setProperty('--tz', tz);
     const z = $('#zoomLabel'); if (z) z.textContent = Math.round(App.zoom * 100) + '%';
     this.updateScale();
+    this.scheduleMarkers();
+    if (window.MapSurvey) MapSurvey.sync();
   },
 
   reset() { App.zoom = 1; App.pan = { x: 0, y: 0 }; this.clampPan(); this.updateTransform(); },
@@ -730,8 +736,10 @@ const Tools = {
       circle: '点击设置圈中心，再点击一次确定半径',
       pin: '点击地图放置大头针选点',
       markpos: '点击地图，标记这一圈结束后你们队的实际位置',
+      measure: '逐点点击地图测距，直线距离累计；Esc 退出，面板可撤销或清空',
       pan: '按住拖动平移地图'
     };
+    if (window.MapSurvey) MapSurvey.sync();
     if (tips[tool]) toast(tips[tool]);
     if (tool === 'flight' && window.CirclePredictor) CirclePredictor.pixels();
   },
@@ -767,6 +775,10 @@ const Tools = {
   handleClick(p) {
     const t = App.tool;
     if (App.mode !== 'game' && this.GAME_ONLY.includes(t)) return;
+    if (t === 'measure') {
+      if (window.MapSurvey) MapSurvey.add(p);
+      return;
+    }
     if (t === 'flight') {
       this.placeFlight(p);
       return;

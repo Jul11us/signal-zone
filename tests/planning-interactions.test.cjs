@@ -97,6 +97,31 @@ test('pan mode retains circle movement and resize hit handling', () => {
   assert.equal(h.App.pin, null);
 });
 
+test('measuring works in either mode without moving edited circles, pins or flights', () => {
+  for (const mode of ['info', 'game']) {
+    const h = harness(), points = [];
+    h.context.window.MapSurvey = h.context.MapSurvey = { add: p => points.push(plain(p)), sync() {} };
+    h.App.mode = mode;
+    h.Tools.set('measure');
+    h.click();
+    assert.deepEqual(points, [[50, 50]]);
+    assert.deepEqual(h.calls.circleDrags, []);
+    assert.deepEqual(h.calls.pins, []);
+    assert.equal(h.App.flight, null);
+    assert.equal(h.App.dragging, false);
+  }
+});
+
+test('wheel zoom preserves the map point under the cursor after panning', () => {
+  const h = harness();
+  h.MapView.updateTransform = h.MapView.scheduleMarkers = () => {};
+  h.App.zoom = 2; h.App.pan = { x: 120, y: -70 };
+  const before = [(200 - h.App.pan.x) / h.App.zoom, (-100 - h.App.pan.y) / h.App.zoom];
+  h.context.document.querySelector('#mapStage').emit('wheel', { clientX: 700, clientY: 400, deltaY: -1, preventDefault() {} });
+  const after = [(200 - h.App.pan.x) / h.App.zoom, (-100 - h.App.pan.y) / h.App.zoom];
+  for (let i = 0; i < 2; i++) assert.ok(Math.abs(before[i] - after[i]) < 1e-8);
+});
+
 test('a normal validated flight completes and rejects open-water endpoints', async () => {
   const h = harness();
   h.waters(() => Promise.resolve(), (x, y) => x === 90 && y === 90);
